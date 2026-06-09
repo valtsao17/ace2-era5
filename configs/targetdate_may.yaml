@@ -1,0 +1,24 @@
+output_root: outputs/targetdate_may
+
+target_dates:
+  - "2014-05-01"
+
+# Monthly ICs in ic_2014.nc land on:
+# 2014-04-01 -> 2014-05-01 = 30 days
+# 2014-03-01 -> 2014-05-01 = 61 days
+# 2014-02-01 -> 2014-05-01 = 89 days
+lead_days: [30, 61, 89]
+
+bbox: [35.0, 37.0, 250.0, 252.0]
+
+expected_members: 25
+
+baseline_start_year: 2012
+baseline_end_year: 2013
+
+era5_zarr: gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3
+
+prediction_pattern: outputs/targetdate_predictions/predictions/ace2s_TMP2m_init_{init_yyyymmdd}_horizon{horizon:03d}d.nc
+
+figure_formats: ["png"]
+max_map_members: 6

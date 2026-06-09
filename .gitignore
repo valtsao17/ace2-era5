@@ -1,0 +1,22 @@
+# Large data — not for git
+checkpoint/
+data/
+
+# Raw inference output and intermediate data — large, reproducible
+outputs/lag_10yr/runs/
+outputs/lag_10yr/combined/
+outputs/lag_10yr/era5_cache_rankcorr/
+
+# Logs
+logs/
+outputs/**/*.log
+outputs/**/nohup.out
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# OS
+.DS_Store

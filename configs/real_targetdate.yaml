@@ -1,0 +1,22 @@
+output_root: outputs/targetdate_real
+
+target_dates:
+  - "2014-04-01"
+
+lead_days: [31, 59, 90]
+
+# Global domain — matches ACE2 1-degree grid
+bbox: [-90.0, 90.0, 0.0, 360.0]
+
+expected_members: 25
+
+# 2-year baseline — ERA5 for these years is already locally cached
+baseline_start_year: 2012
+baseline_end_year: 2013
+
+era5_zarr: gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3
+
+prediction_pattern: outputs/targetdate_predictions/predictions/ace2s_TMP2m_init_{init_yyyymmdd}_horizon{horizon:03d}d.nc
+
+figure_formats: ["png"]
+max_map_members: 6
