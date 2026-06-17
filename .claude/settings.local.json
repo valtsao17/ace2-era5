@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/home/vt55/ace2/.conda/envs/ace2/bin/python *)"
+    ]
+  }
+}

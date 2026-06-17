@@ -1,0 +1,33 @@
+name: ace2
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  # PyTorch with CUDA — conda handles the CUDA-aware build
+  - pytorch
+  - pytorch-cuda=12.1
+  # Scientific stack
+  - numpy
+  - pandas
+  - xarray
+  - scipy
+  - netcdf4
+  - h5netcdf
+  - h5py
+  - zarr
+  - dask
+  - gcsfs
+  - s3fs
+  - matplotlib
+  - cartopy
+  - pyyaml
+  - tqdm
+  - pip:
+      # fme and HuggingFace not on conda-forge
+      - fme
+      - huggingface-hub
+      - hf_xet

@@ -1,0 +1,27 @@
+# OS / editor cruft
+.DS_Store
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Conda environment (recreate from environment.yml instead of tracking it)
+.conda/
+
+# Model weights, checkpoints
+checkpoint/
+
+# Input data and intermediate/combined NetCDFs (large, regenerable from source)
+data/
+combined/
+combined_djf/
+
+# Inference run outputs and downstream analysis outputs (large, regenerable)
+runs/
+outputs/
+
+# Run logs
+logs/
+*.log
