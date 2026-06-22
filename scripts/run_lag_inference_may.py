@@ -99,7 +99,10 @@ def build_config(member_dir: Path, ic_path: Path, forcing_dir: Path,
         "data_writer": {
             "save_prediction_files": True,
             "save_monthly_files": False,
-            "names": ["TMP2m"],
+            # TMP2m + Q2m (2m specific humidity) + PRESsfc (surface pressure)
+            # → enough to derive 2m relative humidity for the heat-index / HHE
+            # analysis (HI from Tmax & RHmin). TMP2m alone was saved originally.
+            "names": ["TMP2m", "Q2m", "PRESsfc"],
         },
         "n_ensemble_per_ic": 1,
         "allow_incompatible_dataset": False,
@@ -113,7 +116,8 @@ def member_complete(member_dir: Path) -> bool:
     try:
         import xarray as xr
         with xr.open_dataset(pred, decode_times=False) as ds:
-            return "TMP2m" in ds.data_vars and ds.sizes.get("time", 0) >= N_STEPS
+            needed = {"TMP2m", "Q2m", "PRESsfc"}
+            return needed.issubset(ds.data_vars) and ds.sizes.get("time", 0) >= N_STEPS
     except Exception:
         return False
 

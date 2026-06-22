@@ -255,9 +255,13 @@ def _roll_to_180(field, lon):
 def plot_global(field: np.ndarray, pval: np.ndarray,
                 lat: np.ndarray, lon: np.ndarray,
                 title: str, out_path: Path, metric_label: str,
-                land_mask: np.ndarray | None = None):
-    abs_field = np.abs(field)
-    abs_r, lon_r = _roll_to_180(abs_field, lon)
+                land_mask: np.ndarray | None = None, signed: bool = False):
+    """signed=True plots the raw (signed) field on a blue-white-red diverging
+    scale instead of |field| on the sequential white-red scale — used for
+    rank correlation (tau), where sign is informative and shouldn't be
+    discarded."""
+    plot_field   = field if signed else np.abs(field)
+    plot_r, lon_r = _roll_to_180(plot_field, lon)
     pval_r, _    = _roll_to_180(pval, lon)
     field_r, _   = _roll_to_180(field, lon)
 
@@ -265,8 +269,14 @@ def plot_global(field: np.ndarray, pval: np.ndarray,
     ax.set_facecolor("#d0e8f0")
 
     LON2D, LAT2D = np.meshgrid(lon_r, lat)
-    mesh = ax.pcolormesh(LON2D, LAT2D, abs_r,
-                         cmap=_SKILL_CMAP, vmin=0.0, vmax=0.6,
+    if signed:
+        vmax = float(np.nanpercentile(np.abs(plot_field), 99)) if np.isfinite(plot_field).any() else 0.6
+        vmax = max(vmax, 1e-6)
+        cmap, vmin = "RdBu_r", -vmax
+    else:
+        cmap, vmin, vmax = _SKILL_CMAP, 0.0, 0.6
+    mesh = ax.pcolormesh(LON2D, LAT2D, plot_r,
+                         cmap=cmap, vmin=vmin, vmax=vmax,
                          shading="nearest", zorder=1)
     ax.set_xlim(-180, 180)
     ax.set_ylim(-90, 90)
@@ -284,11 +294,12 @@ def plot_global(field: np.ndarray, pval: np.ndarray,
         ys = LAT2D[not_sig].ravel()
     ax.plot(xs, ys, "k.", markersize=0.8, alpha=0.4, zorder=4, linewidth=0)
 
-    fig.colorbar(mesh, ax=ax, shrink=0.7, label=f"|{metric_label}|")
-    full_mean = cos_lat_mean(abs_field, lat)
+    label = metric_label if signed else f"|{metric_label}|"
+    fig.colorbar(mesh, ax=ax, shrink=0.7, label=label)
+    full_mean = cos_lat_mean(np.abs(field), lat)
     if land_mask is not None:
-        land_mean  = cos_lat_mean(abs_field, lat, mask=land_mask)
-        ocean_mean = cos_lat_mean(abs_field, lat, mask=~land_mask)
+        land_mean  = cos_lat_mean(np.abs(field), lat, mask=land_mask)
+        ocean_mean = cos_lat_mean(np.abs(field), lat, mask=~land_mask)
         txt = (f"cos-lat mean |{metric_label}|   "
               f"full={full_mean:.3f}   land={land_mean:.3f}   ocean={ocean_mean:.3f}")
     else:
@@ -360,6 +371,7 @@ def main():
             out_dir / "tau_jja_seasonal_global.png",
             metric_label="Kendall τ",
             land_mask=land_mask,
+            signed=True,
         )
         print("All done.", flush=True)
         return
@@ -463,6 +475,7 @@ def main():
         out_dir / "tau_jja_seasonal_global.png",
         metric_label="Kendall τ",
         land_mask=land_mask,
+        signed=True,
     )
 
     print("All done.", flush=True)

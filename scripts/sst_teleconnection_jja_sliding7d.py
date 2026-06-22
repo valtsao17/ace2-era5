@@ -329,6 +329,7 @@ def _render_regression_ax(ax, slope_sub, pval_sub, lon_sub, lat_sub, vmax, title
                          shading="nearest", zorder=1)
     ax.set_xlim(lon_min, lon_max)
     ax.set_ylim(lat_min, lat_max)
+    ax.set_aspect(1.0)
     _draw_conus_borders(ax, (lon_min, lon_max), (lat_min, lat_max))
 
     sig = np.isfinite(pval_sub) & (pval_sub < 0.05)
@@ -344,7 +345,8 @@ def _render_regression_ax(ax, slope_sub, pval_sub, lon_sub, lat_sub, vmax, title
 
 
 def plot_regression_comparison(slope_era5, pval_era5, slope_ace2, pval_ace2,
-                               lat, lon_360, title_era5, title_ace2, out_path):
+                               lat, lon_360, title_era5, title_ace2, out_path,
+                               cbar_label="Regression coeff.  (Δ HHE freq per °C TNA SST)"):
     """Regression of (detrended) gridded JJA HHE frequency onto the detrended
     TNA-mean SST index, ERA5 vs ACE2 side by side, over CONUS."""
     lon_min, lon_max, lat_min, lat_max = CONUS_EXTENT
@@ -369,7 +371,7 @@ def plot_regression_comparison(slope_era5, pval_era5, slope_ace2, pval_ace2,
     _render_regression_ax(axes[0], s_era5, p_era5, lon_sub, lat_sub, vmax, title_era5)
     mesh = _render_regression_ax(axes[1], s_ace2, p_ace2, lon_sub, lat_sub, vmax, title_ace2)
     fig.colorbar(mesh, ax=axes, shrink=0.8, orientation="vertical",
-                label="Regression coeff.  (Δ HHE freq per °C TNA SST)")
+                label=cbar_label)
     fig.suptitle("JJA HHE frequency regressed onto detrended TNA-mean SST index", fontsize=12, y=0.99)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
-"""Cluster skill analysis using ±7-day LOO seasonal-frequency approach.
+"""Cluster skill analysis using raw JJA-mean Tmax instead of HHE frequency.
 
-Parallel to cluster_skill_analysis.py but uses the 37-year seasonal frequency
-arrays from seasonal_jja_skill.py instead of the 111-event per-date pred_prob
-from postprocess_jja_lag.py.
+Parallel to cluster_skill_analysis_sliding7d.py, but clusters each grid point
+on its raw year-to-year JJA-mean Tmax trajectory rather than its derived
+heat-extreme-day frequency. Point of comparison: do the same spatial clusters
+show up, or does thresholding into "extreme days" surface structure that the
+plain mean temperature field doesn't?
 
-pred = ace2_freq  (37, lat, lon) — ACE2 JJA HHE seasonal frequency (continuous)
-obs  = era5_freq  (37, lat, lon) — ERA5 JJA HHE seasonal frequency (continuous)
+pred = ace2_raw_tmax  (37, lat, lon) — ACE2 ensemble+day mean Tmax, °C
+obs  = era5_raw_tmax  (37, lat, lon) — ERA5 day mean Tmax, °C (same calendar
+                                       days as the ACE2 lagged-ensemble output)
 
-Grid-point reference τ is loaded from skill_jja_seasonal.nc (Kendall τ).
+Both are averaged over whichever calendar days the May-1 lagged ensemble run
+actually has output for each year (Jun 1 through early Aug — the combined_jja
+files don't extend through all of August), with ERA5 restricted to those same
+days so the two series are directly comparable.
 
-Outputs → outputs/lag_may/cluster_analysis_sliding7d/
+Outputs → outputs/lag_may/cluster_analysis_rawdata/
 """
 from __future__ import annotations
 import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 import scipy.sparse as sp
 from scipy.stats import kendalltau
@@ -36,10 +43,11 @@ from matplotlib.colors import LinearSegmentedColormap
 PROJECT_ROOT  = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from seasonal_jja_skill import load_land_mask
+from seasonal_jja_skill import COMBINED_DIR, load_era5_tmax_month, kendall_tau_map
 
-SLIDING_DIR = PROJECT_ROOT / "outputs/lag_may/seasonal_jja_sliding7d"
-OUT_DIR     = PROJECT_ROOT / "outputs/lag_may/cluster_analysis_sliding7d"
+RAW_DIR = PROJECT_ROOT / "outputs/lag_may/cluster_analysis_rawdata"
+RAW_NC  = RAW_DIR / "jja_raw_tmax_means.nc"
+OUT_DIR = PROJECT_ROOT / "outputs/lag_may/cluster_analysis_rawdata"
 
 YEARS = list(range(1980, 2017))
 
@@ -59,34 +67,6 @@ _STATE_GEOMS = None
 
 _TAU_CMAP = "RdBu_r"   # diverging blue-white-red, signed tau (negative=blue, positive=red)
 
-# ── association metric (Kendall τ  vs  modified-Kendall z) ──────────────────────
-# METRIC selects how each grid-point / cluster pred–obs series pair is scored.
-# "tau"        → scipy Kendall τ (bounded, default; original behavior)
-# "modkendall" → modified-Kendall z, top-k weighted (Zheng & Lo 2006)
-from mod_kendall_metric import mk_z, DEFAULT_K as _MK_DEFAULT_K  # noqa: E402
-
-METRIC      = "tau"
-METRIC_K    = _MK_DEFAULT_K
-METRIC_SYM  = "τ"               # colorbar / short label
-METRIC_NAME = "Kendall τ"        # axis / legend label
-METRIC_FIXED_VLIM = 0.4          # symmetric scale for fixed-range τ panels
-
-
-def assoc_metric(pred_c, obs_c):
-    """Scalar association score for a pred/obs series pair (metric-aware)."""
-    if METRIC == "modkendall":
-        return mk_z(pred_c, obs_c, METRIC_K)
-    tau, _ = kendalltau(pred_c, obs_c)
-    return tau
-
-
-def _metric_vlim(*arrays, fallback=0.4):
-    """Symmetric color limit: fixed for τ, data-driven (98th pct) for z."""
-    if METRIC != "modkendall":
-        return METRIC_FIXED_VLIM
-    vals = np.concatenate([a[np.isfinite(a)].ravel() for a in arrays if a is not None])
-    return float(np.nanpercentile(np.abs(vals), 98)) if vals.size else fallback
-
 plt.rcParams.update({
     "figure.facecolor": "white",
     "axes.facecolor":   "white",
@@ -94,6 +74,33 @@ plt.rcParams.update({
     "savefig.dpi":      150,
     "savefig.bbox":     "tight",
 })
+
+
+# ── raw data loading ──────────────────────────────────────────────────────────
+
+def compute_jja_raw_means():
+    """JJA-mean raw Tmax per init year, ACE2 (ensemble+day mean) vs ERA5 (°C)."""
+    ace2_raw, era5_raw = [], []
+    lat = lon = None
+    for year in tqdm(YEARS, desc="raw JJA means"):
+        path = COMBINED_DIR / f"tmax_jja_{year}.nc"
+        with xr.open_dataset(path) as ds:
+            if lat is None:
+                lat = ds["lat"].values.astype(np.float32)
+                lon = ds["lon"].values.astype(np.float32)
+            ace2_c = (ds["TMP2m"] - 273.15).values.astype(np.float32)  # (member, time, lat, lon)
+            times  = pd.DatetimeIndex(ds["time"].values)
+        ace2_raw.append(np.nanmean(ace2_c, axis=(0, 1)))
+
+        era5_chunks = []
+        for month in sorted(set(times.month)):
+            data = load_era5_tmax_month(year, month)            # (n_days, lat, lon)
+            days = sorted(int(d) for d in times.day[times.month == month])
+            era5_chunks.append(data[[d - 1 for d in days]])
+        era5_raw.append(np.nanmean(np.concatenate(era5_chunks, axis=0), axis=0))
+
+    return (np.stack(ace2_raw).astype(np.float32),
+            np.stack(era5_raw).astype(np.float32), lat, lon)
 
 
 # ── border helpers ────────────────────────────────────────────────────────────
@@ -195,7 +202,7 @@ def plot_cluster_tau_map(tau_map, labels_2d, tau_cl, tau_domain, lat, lon, title
         _annotate_cluster_tau(ax, labels_2d, tau_cl, LON2D, LAT2D, label_fontsize)
         _plain_map_axes(ax, lon, lat, pad=0.0)
         ax.set_title(title, fontsize=9)
-        plt.colorbar(im, ax=ax, shrink=0.7, pad=0.02, label=METRIC_SYM)
+        plt.colorbar(im, ax=ax, shrink=0.7, pad=0.02, label="τ")
     else:
         data_r, lon_r = _roll_to_180(tau_map, lon)
         labels_r, _   = _roll_to_180(labels_2d.astype(float), lon)
@@ -207,9 +214,9 @@ def plot_cluster_tau_map(tau_map, labels_2d, tau_cl, tau_domain, lat, lon, title
         _annotate_cluster_tau(ax, labels_r, tau_cl, LON2D, LAT2D, label_fontsize)
         ax.set_xlim(-180, 180); ax.set_ylim(-90, 90)
         ax.set_title(title, fontsize=9)
-        plt.colorbar(m, ax=ax, shrink=0.6, pad=0.02, label=METRIC_SYM)
+        plt.colorbar(m, ax=ax, shrink=0.6, pad=0.02, label="τ")
 
-    ax.text(0.02, 0.02, f"Domain-mean {METRIC_SYM} = {tau_domain:.3f}",
+    ax.text(0.02, 0.02, f"Domain-mean τ = {tau_domain:.3f}",
            transform=ax.transAxes, fontsize=10, weight="bold",
            ha="left", va="bottom", zorder=7,
            bbox=dict(boxstyle="round", facecolor="white", alpha=0.85, edgecolor="black"))
@@ -327,34 +334,6 @@ def _expand_labels(labels, valid_mask, n_lat, n_lon):
     return full.reshape(n_lat, n_lon)
 
 
-# ── land/ocean domain masking ──────────────────────────────────────────────────
-
-def _apply_domain_mask(domain, lat, lon, *arrays):
-    """NaN out grid cells outside `domain` ('land' or 'ocean') in each array.
-
-    Each array is either (n_years, lat, lon) or (lat, lon). Masking here, before
-    build_features()/eval_cluster_skill() ever see the data, is enough to keep
-    land and ocean from clustering together: valid_mask is derived from
-    isfinite(pred), and the REDCAP queen-connectivity graph only connects
-    points present in valid_mask, so a masked-out point simply can't bridge
-    the two domains.
-    """
-    land_mask = load_land_mask(lat, lon)
-    if land_mask is None:
-        print("WARNING: land mask unavailable (no forcing_*.nc found) — ignoring --domain", flush=True)
-        return arrays
-    keep = land_mask if domain == "land" else ~land_mask
-    out = []
-    for a in arrays:
-        a = a.copy()
-        if a.ndim == 3:
-            a[:, ~keep] = np.nan
-        else:
-            a[~keep] = np.nan
-        out.append(a)
-    return out
-
-
 # ── clustering evaluation ─────────────────────────────────────────────────────
 
 def build_features(pred, lat, lon, spatial_alpha=SPATIAL_ALPHA):
@@ -405,7 +384,7 @@ def eval_cluster_skill(pred, obs, labels, valid_mask, lat, n_clusters):
         ok = np.isfinite(pred_c) & np.isfinite(obs_c)
         if ok.sum() < 10 or obs_c[ok].std() < 1e-9:
             continue
-        tau = assoc_metric(pred_c[ok], obs_c[ok])
+        tau, _ = kendalltau(pred_c[ok], obs_c[ok])
         tau_cl[c] = tau
         bs      = float(np.mean((pred_c - obs_c) ** 2))
         clim    = float(obs_c.mean())
@@ -553,15 +532,14 @@ def plot_goldilocks(km_results, som_results, redcap_results, tau_gridpt, bss_gri
         if redcap_results:
             ax.plot(rc_k, [r[metric] for r in redcap_results], "^-", color="#2ca02c", label="REDCAP Ward")
         ref = tau_gridpt if metric == "tau_domain" else bss_gridpt
-        lbl = (f"Grid-point {METRIC_SYM}={ref:.3f}" if metric == "tau_domain"
-               else f"Grid-point BSS={ref:.3f}")
+        lbl = f"Grid-point τ={ref:.3f}" if metric == "tau_domain" else f"Grid-point BSS={ref:.3f}"
         ax.axhline(ref, color="0.4", linewidth=1.2, linestyle=":", label=lbl)
         ax.set_xscale("log")
-        ax.set_ylabel("Domain-mean " + (METRIC_NAME if "tau" in metric else "BSS"), fontsize=10)
+        ax.set_ylabel("Domain-mean " + ("Kendall τ" if "tau" in metric else "BSS"), fontsize=10)
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
     axes[1].set_xlabel("Number of clusters  (log scale)", fontsize=10)
-    axes[0].set_title("Goldilocks Resolution  |  ±7-day LOO seasonal frequency  |  ACE2 JJA 1980–2016",
+    axes[0].set_title("Goldilocks Resolution  |  raw JJA-mean Tmax  |  ACE2 JJA 1980–2016",
                       fontsize=10)
     fig.tight_layout()
     out = OUT_DIR / "goldilocks_curve.png"
@@ -572,15 +550,14 @@ def plot_goldilocks(km_results, som_results, redcap_results, tau_gridpt, bss_gri
 
 def plot_tau_vs_size(tau_cl, sizes, title, out):
     ok = (sizes > 0) & np.isfinite(tau_cl)
-    vlim = _metric_vlim(tau_cl[ok], fallback=0.5) if METRIC == "modkendall" else 0.5
     fig, ax = plt.subplots(figsize=(7, 5))
     sc = ax.scatter(sizes[ok], tau_cl[ok], c=tau_cl[ok], cmap=_TAU_CMAP,
-                    alpha=0.6, s=20, vmin=-vlim, vmax=vlim)
+                    alpha=0.6, s=20, vmin=-0.5, vmax=0.5)
     ax.axhline(0, color="0.5", linewidth=0.8, linestyle="--")
     ax.set_xlabel("Cluster size (n valid grid points)")
-    ax.set_ylabel(f"Cluster {METRIC_NAME}")
+    ax.set_ylabel("Cluster Kendall τ")
     ax.set_title(title)
-    plt.colorbar(sc, ax=ax, label=METRIC_SYM)
+    plt.colorbar(sc, ax=ax, label="τ")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     _save_figure(fig, out)
@@ -593,20 +570,19 @@ def plot_comparison(km_results, som_results, redcap_results,
     rc_opt  = max(redcap_results, key=lambda r: r["tau_domain"]) if redcap_results else None
     n_lat, n_lon = len(lat), len(lon)
 
-    vlim = _metric_vlim(tau_gridpt_map, km_opt["tau_map"], som_opt["tau_map"])
     _three_panel_map(
         [tau_gridpt_map, km_opt["tau_map"], som_opt["tau_map"]],
-        [f"Grid-point {METRIC_SYM} (reference)",
-         f"K-means {METRIC_SYM}  k={km_opt['k']}  ({METRIC_SYM}={km_opt['tau_domain']:.3f})",
-         f"SOM {METRIC_SYM}  {som_opt['m']}×{som_opt['n']}  ({METRIC_SYM}={som_opt['tau_domain']:.3f})"],
+        ["Grid-point τ (reference)",
+         f"K-means τ  k={km_opt['k']}  (τ={km_opt['tau_domain']:.3f})",
+         f"SOM τ  {som_opt['m']}×{som_opt['n']}  (τ={som_opt['tau_domain']:.3f})"],
         lat, lon, OUT_DIR / "tau_comparison_maps.png",
-        vmin=-vlim, vmax=vlim, cmap=_TAU_CMAP, cbar_label=METRIC_SYM,
+        vmin=-0.4, vmax=0.4, cmap=_TAU_CMAP, cbar_label="τ",
     )
 
     km_labels_full = _expand_labels(km_opt["labels"], valid_mask, n_lat, n_lon)
     plot_cluster_tau_map(km_opt["tau_map"], km_labels_full, km_opt["tau_cl"],
                          km_opt["tau_domain"], lat, lon,
-                         f"K-means {METRIC_SYM} per cluster  k={km_opt['k']}",
+                         f"K-means τ per cluster  k={km_opt['k']}",
                          OUT_DIR / f"tau_kmeans_k{km_opt['k']}.png")
     _cluster_map_figure(km_labels_full, lat, lon, int(km_labels_full.max()) + 1,
                         f"K-means cluster assignment  k={km_opt['k']}",
@@ -615,7 +591,7 @@ def plot_comparison(km_results, som_results, redcap_results,
     som_labels_full = _expand_labels(som_opt["labels"], valid_mask, n_lat, n_lon)
     plot_cluster_tau_map(som_opt["tau_map"], som_labels_full, som_opt["tau_cl"],
                          som_opt["tau_domain"], lat, lon,
-                         f"SOM {METRIC_SYM} per cluster  {som_opt['m']}×{som_opt['n']}",
+                         f"SOM τ per cluster  {som_opt['m']}×{som_opt['n']}",
                          OUT_DIR / f"tau_som_{som_opt['m']}x{som_opt['n']}.png")
     _cluster_map_figure(som_labels_full, lat, lon, int(som_labels_full.max()) + 1,
                         f"SOM cluster assignment  {som_opt['m']}×{som_opt['n']}",
@@ -625,7 +601,7 @@ def plot_comparison(km_results, som_results, redcap_results,
         rc_labels_full = _expand_labels(rc_opt["labels"], valid_mask, n_lat, n_lon)
         plot_cluster_tau_map(rc_opt["tau_map"], rc_labels_full, rc_opt["tau_cl"],
                              rc_opt["tau_domain"], lat, lon,
-                             f"REDCAP Ward {METRIC_SYM} per cluster  k={rc_opt['k']}",
+                             f"REDCAP Ward τ per cluster  k={rc_opt['k']}",
                              OUT_DIR / f"tau_redcap_k{rc_opt['k']}.png")
         _cluster_map_figure(rc_labels_full, lat, lon, int(rc_labels_full.max()) + 1,
                             f"REDCAP Ward  k={rc_opt['k']}",
@@ -638,7 +614,7 @@ def plot_comparison(km_results, som_results, redcap_results,
             km_match_labels = _expand_labels(km_match["labels"], valid_mask, n_lat, n_lon)
             plot_cluster_tau_map(km_match["tau_map"], km_match_labels, km_match["tau_cl"],
                                  km_match["tau_domain"], lat, lon,
-                                 f"K-means {METRIC_SYM} per cluster  k={km_match['k']}  (matched to REDCAP)",
+                                 f"K-means τ per cluster  k={km_match['k']}  (matched to REDCAP)",
                                  OUT_DIR / f"tau_kmeans_k{km_match['k']}_matched.png")
             _cluster_map_figure(km_match_labels, lat, lon, int(km_match_labels.max()) + 1,
                                 f"K-means cluster assignment  k={km_match['k']}  (matched to REDCAP)",
@@ -648,7 +624,7 @@ def plot_comparison(km_results, som_results, redcap_results,
         som_match_labels = _expand_labels(som_match["labels"], valid_mask, n_lat, n_lon)
         plot_cluster_tau_map(som_match["tau_map"], som_match_labels, som_match["tau_cl"],
                              som_match["tau_domain"], lat, lon,
-                             f"SOM {METRIC_SYM} per cluster  {som_match['m']}×{som_match['n']}"
+                             f"SOM τ per cluster  {som_match['m']}×{som_match['n']}"
                              f"  (k={som_match['k']}, matched to REDCAP k={rc_opt['k']})",
                              OUT_DIR / f"tau_som_{som_match['m']}x{som_match['n']}_matched.png")
         _cluster_map_figure(som_match_labels, lat, lon, int(som_match_labels.max()) + 1,
@@ -730,8 +706,6 @@ def load_results():
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    global OUT_DIR, KMEANS_SIZES, SOM_SIZES, REDCAP_SIZES
-    global METRIC, METRIC_K, METRIC_SYM, METRIC_NAME
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--replot",        action="store_true")
@@ -739,61 +713,30 @@ def main():
     p.add_argument("--skip-redcap",   action="store_true")
     p.add_argument("--redcap-only",   action="store_true",
                    help="Load cached K-means/SOM results, run REDCAP only, re-save and replot")
-    p.add_argument("--domain", choices=["all", "land", "ocean"], default="all",
-                   help="Restrict clustering to land-only or ocean-only grid cells")
-    p.add_argument("--metric", choices=["tau", "modkendall"], default="tau",
-                   help="Association metric: Kendall tau (default) or modified-Kendall z")
-    p.add_argument("--metric-k", type=int, default=METRIC_K,
-                   help="Truncation value k for the modified-Kendall metric")
+    p.add_argument("--recompute-raw", action="store_true",
+                   help="Recompute jja_raw_tmax_means.nc even if a cached copy exists")
     args = p.parse_args()
 
-    METRIC   = args.metric
-    METRIC_K = args.metric_k
-    metric_suffix = "_modkendall" if METRIC == "modkendall" else ""
-    if METRIC == "modkendall":
-        METRIC_SYM  = "z"
-        METRIC_NAME = f"mod-Kendall z (k={METRIC_K})"
-        print(f"Metric: modified-Kendall z  (k={METRIC_K})", flush=True)
-
-    domain_suffix = "" if args.domain == "all" else f"_{args.domain}"
+    global OUT_DIR, KMEANS_SIZES, SOM_SIZES, REDCAP_SIZES
     if args.conus:
-        OUT_DIR      = PROJECT_ROOT / f"outputs/lag_may/cluster_analysis_sliding7d_conus{domain_suffix}{metric_suffix}"
+        OUT_DIR      = PROJECT_ROOT / "outputs/lag_may/cluster_analysis_rawdata_conus"
         KMEANS_SIZES = KMEANS_SIZES_CONUS
         SOM_SIZES    = SOM_SIZES_CONUS
         REDCAP_SIZES = REDCAP_SIZES_CONUS
         print("CONUS mode", flush=True)
-    else:
-        OUT_DIR = PROJECT_ROOT / f"outputs/lag_may/cluster_analysis_sliding7d{domain_suffix}{metric_suffix}"
-    if args.domain != "all":
-        print(f"Domain: {args.domain}-only", flush=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    freq_nc = SLIDING_DIR / "jja_seasonal_freqs.nc"
-    # Grid-point reference must use the same metric as the cluster maps.
-    if METRIC == "modkendall":
-        skill_nc = PROJECT_ROOT / "outputs/lag_may/seasonal_jja_sliding7d_modkendall/skill_jja_seasonal.nc"
-    else:
-        skill_nc = SLIDING_DIR / "skill_jja_seasonal.nc"
-    if not freq_nc.exists():
-        print(f"ERROR: {freq_nc} not found. Run seasonal_jja_skill.py first.", flush=True)
-        return
 
     if args.redcap_only:
         print("--redcap-only: loading cached K-means/SOM, running REDCAP ...", flush=True)
         km_results, som_results, _, tau_gridpt_map, bss_gridpt_map, valid_mask, lat, lon, _ = load_results()
         tau_gridpt_ref = domain_mean_tau(tau_gridpt_map, lat)
         bss_gridpt_ref = domain_mean_tau(bss_gridpt_map, lat)
-        # Rebuild feature matrix for REDCAP
-        freq_nc = SLIDING_DIR / "jja_seasonal_freqs.nc"
-        ds = xr.open_dataset(freq_nc)
-        lat_f = ds["lat"].values; lon_f = ds["lon"].values
-        pred_full = ds["ace2_freq"].values.astype(np.float32)
-        obs_full  = ds["era5_freq"].values.astype(np.float32)
+        ds = xr.open_dataset(RAW_NC)
+        pred_full = ds["ace2_raw_tmax"].values.astype(np.float32)
+        obs_full  = ds["era5_raw_tmax"].values.astype(np.float32)
         ds.close()
         pred = pred_full if not args.conus else pred_full[:, CONUS_LAT_SLICE, CONUS_LON_SLICE]
         obs  = obs_full  if not args.conus else obs_full[:, CONUS_LAT_SLICE, CONUS_LON_SLICE]
-        if args.domain != "all":
-            pred, obs = _apply_domain_mask(args.domain, lat, lon, pred, obs)
         _, features_temporal, _ = build_features(pred, lat, lon)
         redcap_results, _, merge_dists = run_redcap_sweep(features_temporal, pred, obs, valid_mask, lat)
         save_results(km_results, som_results, redcap_results,
@@ -805,19 +748,28 @@ def main():
         tau_gridpt_ref = domain_mean_tau(tau_gridpt_map, lat)
         bss_gridpt_ref = domain_mean_tau(bss_gridpt_map, lat)
     else:
-        print(f"Loading seasonal frequencies from {freq_nc}", flush=True)
-        ds = xr.open_dataset(freq_nc)
-        lat = ds["lat"].values
-        lon = ds["lon"].values
-        pred = ds["ace2_freq"].values.astype(np.float32)   # (37, 180, 360)
-        obs  = ds["era5_freq"].values.astype(np.float32)
-        ds.close()
+        if RAW_NC.exists() and not args.recompute_raw:
+            print(f"Loading cached raw JJA means from {RAW_NC}", flush=True)
+            ds = xr.open_dataset(RAW_NC)
+            lat = ds["lat"].values
+            lon = ds["lon"].values
+            pred = ds["ace2_raw_tmax"].values.astype(np.float32)
+            obs  = ds["era5_raw_tmax"].values.astype(np.float32)
+            ds.close()
+        else:
+            print("Computing JJA raw Tmax means (ACE2 ensemble+day mean vs ERA5) ...", flush=True)
+            pred, obs, lat, lon = compute_jja_raw_means()
+            RAW_DIR.mkdir(parents=True, exist_ok=True)
+            xr.Dataset(
+                {"ace2_raw_tmax": (("year", "lat", "lon"), pred),
+                 "era5_raw_tmax": (("year", "lat", "lon"), obs)},
+                coords={"year": YEARS, "lat": lat, "lon": lon},
+            ).to_netcdf(RAW_NC)
+            print(f"wrote: {RAW_NC}", flush=True)
         print(f"  pred/obs: {pred.shape}", flush=True)
 
-        print(f"Loading grid-point τ reference from {skill_nc}", flush=True)
-        ds = xr.open_dataset(skill_nc)
-        tau_gridpt_map = ds["kendall_tau"].values.astype(np.float32)
-        ds.close()
+        print("Computing grid-point Kendall tau (ACE2 vs ERA5 raw Tmax) ...", flush=True)
+        tau_gridpt_map, _ = kendall_tau_map(pred, obs)
         tau_gridpt_ref = domain_mean_tau(tau_gridpt_map, lat)
         print(f"  Grid-point domain-mean τ = {tau_gridpt_ref:.4f}", flush=True)
 
@@ -839,15 +791,6 @@ def main():
             tau_gridpt_ref = domain_mean_tau(tau_gridpt_map, lat)
             bss_gridpt_ref = domain_mean_tau(bss_gridpt_map, lat)
             print(f"  CONUS τ={tau_gridpt_ref:.4f}  BSS={bss_gridpt_ref:.4f}", flush=True)
-
-        if args.domain != "all":
-            pred, obs, tau_gridpt_map, bss_gridpt_map = _apply_domain_mask(
-                args.domain, lat, lon, pred, obs, tau_gridpt_map, bss_gridpt_map)
-            tau_gridpt_ref = domain_mean_tau(tau_gridpt_map, lat)
-            bss_gridpt_ref = domain_mean_tau(bss_gridpt_map, lat)
-            n_valid = int(np.isfinite(tau_gridpt_map).sum())
-            print(f"  {args.domain}-only: τ={tau_gridpt_ref:.4f}  BSS={bss_gridpt_ref:.4f}  "
-                  f"n_valid={n_valid}", flush=True)
 
         print("Building feature matrices ...", flush=True)
         features_full, features_temporal, valid_mask = build_features(pred, lat, lon)

@@ -83,6 +83,7 @@ _STATE_GEOMS = None
 _PLATE = ccrs.PlateCarree()
 _HEAT_CMAP = LinearSegmentedColormap.from_list(
     "heat_skill", ["white", "#FFE066", "#FF8C00", "#CC0000", "#67000d"], N=256)
+_TAU_CMAP = "RdBu_r"   # diverging blue-white-red, signed tau (negative=blue, positive=red)
 
 plt.rcParams.update({
     "figure.facecolor": "white",
@@ -560,8 +561,8 @@ def plot_cluster_size_hist(sizes, n_clusters: int, title: str, out_path: Path):
 def plot_tau_vs_size(tau_cl, sizes, title: str, out_path: Path):
     ok = (sizes > 0) & np.isfinite(tau_cl)
     fig, ax = plt.subplots(figsize=(7, 5))
-    sc = ax.scatter(sizes[ok], tau_cl[ok], c=tau_cl[ok], cmap=_HEAT_CMAP,
-                    alpha=0.6, s=20, vmin=-0.3, vmax=0.5)
+    sc = ax.scatter(sizes[ok], tau_cl[ok], c=tau_cl[ok], cmap=_TAU_CMAP,
+                    alpha=0.6, s=20, vmin=-0.5, vmax=0.5)
     ax.axhline(0, color="0.5", linewidth=0.8, linestyle="--")
     ax.set_xlabel("Cluster size (n valid grid points)")
     ax.set_ylabel("Cluster Kendall τ")
@@ -718,24 +719,24 @@ def plot_full_comparison(km_results, som_results, redcap_results,
 
     # --- tau comparison ---
     print("  tau comparison maps ...", flush=True)
-    tau_panels  = [np.abs(tau_gridpt_map), np.abs(km_opt["tau_map"]), np.abs(som_opt["tau_map"])]
+    tau_panels  = [tau_gridpt_map, km_opt["tau_map"], som_opt["tau_map"]]
     tau_titles  = [
-        "Grid-point |τ| (reference)",
-        f"K-means |τ|  k={km_opt['k']}  (domain τ={km_opt['tau_domain']:.3f})",
-        f"SOM |τ|  {som_opt['m']}×{som_opt['n']}  (domain τ={som_opt['tau_domain']:.3f})",
+        "Grid-point τ (reference)",
+        f"K-means τ  k={km_opt['k']}  (domain τ={km_opt['tau_domain']:.3f})",
+        f"SOM τ  {som_opt['m']}×{som_opt['n']}  (domain τ={som_opt['tau_domain']:.3f})",
     ]
     if rc_opt:
-        tau_panels.append(np.abs(rc_opt["tau_map"]))
-        tau_titles.append(f"REDCAP Ward |τ|  k={rc_opt['k']}  (domain τ={rc_opt['tau_domain']:.3f})")
+        tau_panels.append(rc_opt["tau_map"])
+        tau_titles.append(f"REDCAP Ward τ  k={rc_opt['k']}  (domain τ={rc_opt['tau_domain']:.3f})")
     _three_panel_map_with_coords(
         tau_panels[:3], tau_titles[:3],
-        "|Kendall τ|: Grid-point vs Cluster-level — ACE2 JJA 1980–2016",
+        "Kendall τ: Grid-point vs Cluster-level — ACE2 JJA 1980–2016",
         lat, lon, OUT_DIR / "tau_comparison_maps.png",
-        vmin=0, vmax=0.4, cmap=_HEAT_CMAP, cbar_label="|τ|",
+        vmin=-0.4, vmax=0.4, cmap=_TAU_CMAP, cbar_label="τ",
     )
     if rc_opt:
-        _single_map_figure(np.abs(rc_opt["tau_map"]), lat, lon,
-                           tau_titles[-1], 0, 0.4, _HEAT_CMAP, "|τ|",
+        _single_map_figure(rc_opt["tau_map"], lat, lon,
+                           tau_titles[-1], -0.4, 0.4, _TAU_CMAP, "τ",
                            OUT_DIR / f"tau_redcap_k{rc_opt['k']}.png")
 
     # --- BSS comparison ---
