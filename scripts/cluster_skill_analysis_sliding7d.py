@@ -188,7 +188,7 @@ def plot_cluster_tau_map(tau_map, labels_2d, tau_cl, tau_domain, lat, lon, title
         e = [float(lon_plot[0]) - 0.5, float(lon_plot[-1]) + 0.5,
              float(lat[0]) - 0.5, float(lat[-1]) + 0.5]
         fig, ax = plt.subplots(figsize=(10, 7))
-        im = ax.imshow(tau_map, origin="lower", extent=e, aspect="auto",
+        im = ax.imshow(tau_map, origin="lower", extent=e, aspect="equal",
                        vmin=vmin, vmax=vmax, cmap=cmap, zorder=1,
                        interpolation="nearest")
         LON2D, LAT2D = np.meshgrid(lon_plot, lat)
@@ -226,7 +226,7 @@ def _single_map_figure(data, lat, lon, title, vmin, vmax, cmap, cbar_label, out)
         e = [float(lon_plot[0]) - 0.5, float(lon_plot[-1]) + 0.5,
              float(lat[0]) - 0.5, float(lat[-1]) + 0.5]
         fig, ax = plt.subplots(figsize=(10, 7))
-        im = ax.imshow(data, origin="lower", extent=e, aspect="auto",
+        im = ax.imshow(data, origin="lower", extent=e, aspect="equal",
                        vmin=vmin, vmax=vmax, cmap=cmap, zorder=1)
         _plain_map_axes(ax, lon, lat)
         ax.set_title(title, fontsize=9)
@@ -285,7 +285,7 @@ def _cluster_map_figure(labels_2d, lat, lon, n_clusters, title, out):
              float(lat[0]) - 0.5, float(lat[-1]) + 0.5]
         fig, ax = plt.subplots(figsize=(10, 7))
         ax.set_facecolor("white")
-        im = ax.imshow(labels_2d.astype(float), origin="lower", extent=e, aspect="auto",
+        im = ax.imshow(labels_2d.astype(float), origin="lower", extent=e, aspect="equal",
                        cmap=cmap, vmin=0, vmax=n_clusters - 1, zorder=1,
                        interpolation="nearest")
         _plain_map_axes(ax, lon, lat, pad=0.0)
@@ -561,7 +561,7 @@ def plot_goldilocks(km_results, som_results, redcap_results, tau_gridpt, bss_gri
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
     axes[1].set_xlabel("Number of clusters  (log scale)", fontsize=10)
-    axes[0].set_title("Goldilocks Resolution  |  ±7-day LOO seasonal frequency  |  ACE2 JJA 1980–2016",
+    axes[0].set_title("Goldilocks Resolution  |  ±7-day seasonal frequency  |  ACE2 JJA 1980–2016",
                       fontsize=10)
     fig.tight_layout()
     out = OUT_DIR / "goldilocks_curve.png"

@@ -165,7 +165,7 @@ def main():
     print(f"Grid: {len(lat)} lat × {len(lon)} lon", flush=True)
 
     yr_range     = "1980–2016  (n=37 seasons)"
-    thresh_label = "±7-day sliding window thresholds, LOO"
+    thresh_label = "±7-day sliding window thresholds"
 
     plot_global(
         r_map, r_pval, lat, lon,

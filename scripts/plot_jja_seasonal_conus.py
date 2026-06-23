@@ -190,7 +190,7 @@ def main():
         land_mask_c = np.ones((len(lat_c), len(lon_c)), dtype=bool)
 
     yr_range     = "1980–2016  (n=37 seasons)"
-    thresh_label = "±7-day sliding window thresholds, LOO"
+    thresh_label = "±7-day sliding window thresholds"
 
     print("Loading borders ...", flush=True)
     _get_borders()

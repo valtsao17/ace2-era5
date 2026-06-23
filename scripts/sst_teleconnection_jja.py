@@ -476,7 +476,7 @@ def plot_corr_panels(
 
     fig.suptitle(
         f"Relationship between SSTs and JJA HHE frequency in SE-US\n"
-        f"{years[0]}–{years[-1]}  |  LOO ±15-day threshold  |  stippling: p < 0.05",
+        f"{years[0]}–{years[-1]}  |  ±15-day threshold  |  stippling: p < 0.05",
         fontsize=10,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)

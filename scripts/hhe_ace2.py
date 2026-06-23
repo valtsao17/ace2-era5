@@ -58,14 +58,17 @@ def assign_times(ds: xr.Dataset, init_time: datetime) -> xr.Dataset:
 def rh_from_q(t_K: np.ndarray, q: np.ndarray, p_Pa: np.ndarray) -> np.ndarray:
     """Relative humidity (%) from specific humidity, temperature, pressure.
 
-    e  = q p / (eps + (1-eps) q)                     (vapor pressure, Pa)
-    es = 611.2 exp(a Tc / (b + Tc))                  (Magnus, same a,b as ERA5 side)
-    RH = 100 e / es,  clipped to [0, 100]
+    Jia et al. (2024) Eq. 3 — the exact SPEAR/model formula (paper-strict):
+
+        RH% = 0.263 * p[Pa] * q[kg/kg] * exp(-17.67 (T-273.16) / (T-29.65))
+
+    This is e ~= p*q/0.622 over es(T) = 611.2 exp(17.67(T-273.16)/(T-29.65)),
+    folded into the single constant 100/(0.622*611.2) ~= 0.263 (Bolton/SPEAR
+    saturation-vapor-pressure form, distinct from the Magnus a,b used for ERA5).
+    T in K, p in Pa, q in kg/kg; clipped to [0, 100].
     """
-    tc = t_K - 273.15
-    e = q * p_Pa / (EPS + (1.0 - EPS) * q)
-    es = 611.2 * np.exp(MAGNUS_A * tc / (MAGNUS_B + tc))
-    return np.clip(100.0 * e / es, 0.0, 100.0)
+    exponent = 17.67 * (t_K - 273.16) / (t_K - 29.65)
+    return np.clip(0.263 * p_Pa * q / np.exp(exponent), 0.0, 100.0)
 
 
 def member_jja_hi(pred_path: Path, init_time: datetime) -> xr.DataArray | None:

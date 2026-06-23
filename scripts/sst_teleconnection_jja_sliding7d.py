@@ -233,6 +233,7 @@ def _render_corr_ax(ax, corr, pval, lat, lon_360, title):
                          shading="nearest", zorder=1)
     ax.set_xlim(lon_min, lon_max)
     ax.set_ylim(lat_min, lat_max)
+    ax.set_aspect("equal")   # true geographic proportions, no vertical squish
     _draw_coast_and_borders(ax, (lon_min, lon_max), (lat_min, lat_max))
 
     sig = np.isfinite(pval_sub) & (pval_sub < 0.05)
@@ -432,7 +433,7 @@ def main():
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     yr_range = f"{YEARS[0]}–{YEARS[-1]}"
-    thresh_label = "±7-day sliding window thresholds, LOO"
+    thresh_label = "±7-day sliding window thresholds"
 
     plot_corr_panel(
         corr_era5, pval_era5, sst_lat, sst_lon,

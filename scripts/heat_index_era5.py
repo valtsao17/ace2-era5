@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """ERA5-only NOAA Heat Index (HI) climatology, JJA 1980-2016.
 
-For each grid cell and each JJA calendar day:
-  1. Find the hour of daily max 2m temperature (same definition as the
-     existing era5_daily_tmax_C pipeline: regrid to the 1-degree ACE2
-     template via nearest-neighbor, then take the hourly max per day).
-  2. Pull the 2m dewpoint temperature at that *same* hour (same regridded
-     grid cell, so it's the same underlying ERA5 column).
-  3. RH (Magnus-Tetens, a=17.625, b=243.04, T/Td in degC):
-       RH = 100 * exp(a*Td/(b+Td)) / exp(a*T/(b+T))
-  4. NOAA HI (Rothfusz regression, T in degF, RH in 0-100):
+For each grid cell and each JJA calendar day (paper definition: daily Tmax +
+daily RHmin, both from 6-hourly samples so ERA5 matches ACE2's cadence 1:1):
+  1. Regrid hourly 2m T and Td to the 1-degree ACE2 template (nearest), then
+     subsample to 6-hourly (00,06,12,18 UTC) — the 4 synoptic times ACE2 has.
+  2. Daily Tmax  = max of the 4 6-hourly temperatures.
+  3. RH (Magnus-Tetens, a=17.72, b=243.12, T/Td in degC) at each 6-hourly step:
+       RH = 100 * exp(a*Td/(b+Td)) / exp(a*T/(b+T));  daily RHmin = min of the 4.
+  4. NOAA HI (Rothfusz regression, T in degF, RH in 0-100), from Tmax & RHmin:
        HI = -42.379 + 2.04901523*T + 10.14333127*RH - 0.22475541*T*RH
             - 0.00683783*T^2 - 0.05481717*RH^2 + 0.00122874*T^2*RH
             + 0.00085282*T*RH^2 - 0.00000199*T^2*RH^2
@@ -43,8 +42,8 @@ MONTHS      = [6, 7, 8]
 BBOX        = (-90.0, 90.0, 0.0, 360.0)
 HI_THRESH   = 105.0
 
-MAGNUS_A = 17.625
-MAGNUS_B = 243.04
+MAGNUS_A = 17.72    # WMO/paper Magnus coefficients (Eqn 1), matches reference paper
+MAGNUS_B = 243.12   # (was 17.625/243.04 Alduchov-Eskridge; switched to match paper)
 
 OUT_DIR    = PROJECT_ROOT / "outputs/lag_may/heat_index_era5"
 CACHE_DIR  = OUT_DIR / "monthly_cache"
@@ -122,20 +121,22 @@ def compute_month_hi(year: int, month: int, template: xr.DataArray, force: bool 
     t_arr  = t_da.values.reshape(n_days, 24, nlat, nlon)
     td_arr = td_da.values.reshape(n_days, 24, nlat, nlon)
 
-    idx = np.argmax(t_arr, axis=1, keepdims=True)            # (n_days, 1, nlat, nlon)
-    t_max  = np.take_along_axis(t_arr, idx, axis=1)[:, 0]     # (n_days, nlat, nlon)
-    td_match = np.take_along_axis(td_arr, idx, axis=1)[:, 0]  # (n_days, nlat, nlon)
-
-    rh = relative_humidity(t_max, td_match)
-    rh = np.clip(rh, 0.0, 100.0)
-    hi = heat_index(t_max * 9.0 / 5.0 + 32.0, rh)
+    # Subsample to 6-hourly (00,06,12,18 UTC) so ERA5 matches ACE2's 6-hourly
+    # cadence exactly: BOTH now use daily Tmax + daily RHmin from 4 synoptic
+    # times (paper definition), instead of ERA5's old RH-at-Tmax-hour from 24h.
+    t6  = t_arr[:, ::6, :, :]                              # (n_days, 4, nlat, nlon)
+    td6 = td_arr[:, ::6, :, :]
+    t_max  = t6.max(axis=1)                                # daily Tmax  (paper)
+    rh6    = relative_humidity(t6, td6)                    # RH at each 6-hourly step
+    rh_min = np.clip(rh6.min(axis=1), 0.0, 100.0)          # daily RHmin (paper, matches ACE2)
+    hi = heat_index(t_max * 9.0 / 5.0 + 32.0, rh_min)
 
     day_times = t_da.time.values.reshape(n_days, 24)[:, 0]
     out = xr.Dataset(
         {
-            "tmax_C": (("time", "lat", "lon"), t_max.astype(np.float32)),
-            "rh_pct": (("time", "lat", "lon"), rh.astype(np.float32)),
-            "hi_F":   (("time", "lat", "lon"), hi.astype(np.float32)),
+            "tmax_C":    (("time", "lat", "lon"), t_max.astype(np.float32)),
+            "rhmin_pct": (("time", "lat", "lon"), rh_min.astype(np.float32)),
+            "hi_F":      (("time", "lat", "lon"), hi.astype(np.float32)),
         },
         coords={"time": day_times, "lat": template.lat.values, "lon": template.lon.values},
     )

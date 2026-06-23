@@ -465,7 +465,7 @@ def plot_skill_vs_lead(lead_days: list[int], bss_list: list[float],
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
 
     ax1.set_title("ACE2 JJA heat-extreme skill vs lead time\n"
-                  "1980–2016 LOO · global cos-lat weighted", fontsize=10)
+                  "1980–2016 · global cos-lat weighted", fontsize=10)
     ax1.set_xticks(lead_days)
     ax1.set_xticklabels([f"~{d}d" for d in lead_days])
 
@@ -545,13 +545,13 @@ def main():
         # Per-lead tau and BSS maps
         plot_tau_map(
             tau_lead, lat, lon,
-            f"|Kendall τ| — ACE2 JJA {label} | {YEARS[0]}–{YEARS[-1]} LOO",
+            f"|Kendall τ| — ACE2 JJA {label} | {YEARS[0]}–{YEARS[-1]}",
             FIGURES_DIR / f"tau_map_{label.lower()}.png",
             land_mask=land_mask,
         )
         plot_bss_map(
             bss_lead, lat, lon,
-            f"|BSS| — ACE2 JJA {label} | {YEARS[0]}–{YEARS[-1]} LOO",
+            f"|BSS| — ACE2 JJA {label} | {YEARS[0]}–{YEARS[-1]}",
             FIGURES_DIR / f"bss_map_{label.lower()}.png",
             land_mask=land_mask,
         )
@@ -584,13 +584,13 @@ def main():
 
     plot_tau_map(
         tau_jja, lat, lon,
-        f"|Kendall τ| — ACE2 JJA pooled (Jun+Jul+Aug) | {YEARS[0]}–{YEARS[-1]} LOO",
+        f"|Kendall τ| — ACE2 JJA pooled (Jun+Jul+Aug) | {YEARS[0]}–{YEARS[-1]}",
         FIGURES_DIR / "tau_map_jja.png",
         land_mask=land_mask,
     )
     plot_bss_map(
         bss_jja, lat, lon,
-        f"|BSS| — ACE2 JJA pooled (Jun+Jul+Aug) | {YEARS[0]}–{YEARS[-1]} LOO",
+        f"|BSS| — ACE2 JJA pooled (Jun+Jul+Aug) | {YEARS[0]}–{YEARS[-1]}",
         FIGURES_DIR / "bss_map_jja.png",
         land_mask=land_mask,
     )

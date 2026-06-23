@@ -138,10 +138,10 @@ def main():
 
     yr_range = f"{YEARS[0]}-{YEARS[-1]}"
     plot_pr_map(precision, lat, lon,
-                f"ACE2 day-level HHE precision  |  JJA {yr_range}  |  ±7d LOO, majority vote",
+                f"ACE2 day-level HHE precision  |  JJA {yr_range}  |  ±7d, majority vote",
                 OUT_DIR / "precision_jja_seasonal_global.png", "Precision")
     plot_pr_map(recall, lat, lon,
-                f"ACE2 day-level HHE recall  |  JJA {yr_range}  |  ±7d LOO, majority vote",
+                f"ACE2 day-level HHE recall  |  JJA {yr_range}  |  ±7d, majority vote",
                 OUT_DIR / "recall_jja_seasonal_global.png", "Recall")
     print("All done.", flush=True)
 

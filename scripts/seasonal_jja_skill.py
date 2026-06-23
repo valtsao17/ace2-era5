@@ -134,30 +134,32 @@ def _load_all_ace2_jja(nlat: int, nlon: int) -> np.ndarray:
 
 # ── LOO sliding-window thresholds ─────────────────────────────────────────
 
-def _thresh_one_day_loo(day_data: np.ndarray, pct: float) -> np.ndarray:
-    """LOO 90th-pct threshold for one JJA day position.
+def _thresh_one_day(day_data: np.ndarray, pct: float) -> np.ndarray:
+    """Full-climatology pct threshold for one JJA day position (no LOYO).
+
+    A single threshold is computed from ALL years' samples and applied to every
+    year. Leave-one-year-out was removed per methodology: the predictand is a
+    seasonal frequency scored against a fixed climatological threshold.
 
     day_data: (n_years, n_samp_per_year, nlat, nlon)
-    Returns  : (n_years, nlat, nlon)
+    Returns  : (n_years, nlat, nlon)  (one threshold broadcast over years)
     """
     n_years, n_samp, nlat, nlon = day_data.shape
-    result = np.full((n_years, nlat, nlon), np.nan, dtype=np.float32)
-    for y in range(n_years):
-        mask    = np.ones(n_years, dtype=bool)
-        mask[y] = False
-        pool    = day_data[mask].reshape(-1, nlat, nlon)   # ((n_years-1)*n_samp, nlat, nlon)
-        n_pool  = pool.shape[0]
-        k       = min(n_pool - 1, max(0, int(np.floor(pct / 100.0 * n_pool))))
-        result[y] = np.partition(pool, k, axis=0)[k]
-    return result
+    pool   = day_data.reshape(-1, nlat, nlon)          # all years pooled (no leave-out)
+    n_pool = pool.shape[0]
+    k      = min(n_pool - 1, max(0, int(np.floor(pct / 100.0 * n_pool))))
+    thr    = np.partition(pool, k, axis=0)[k]          # (nlat, nlon)
+    return np.broadcast_to(thr, (n_years, nlat, nlon)).astype(np.float32)
 
 
-def compute_daywise_thresholds_loo(all_data: np.ndarray,
-                                    window: int = THRESH_WINDOW,
-                                    pct: float = HOT_PCT) -> np.ndarray:
-    """(n_years, 92, nlat, nlon) LOO thresholds via ±window sliding pool.
+def compute_daywise_thresholds(all_data: np.ndarray,
+                               window: int = THRESH_WINDOW,
+                               pct: float = HOT_PCT) -> np.ndarray:
+    """(n_years, 92, nlat, nlon) full-climatology thresholds via ±window pool.
 
-    all_data: (n_years, [n_members,] 92, nlat, nlon)
+    No LOYO: each day position's threshold is the pct of the ±window pool over
+    ALL years, applied to every year (broadcast). all_data: (n_years,
+    [n_members,] 92, nlat, nlon).
     """
     n_years = all_data.shape[0]
     n_days  = all_data.shape[-3]
@@ -174,13 +176,17 @@ def compute_daywise_thresholds_loo(all_data: np.ndarray,
         day_data = np.ascontiguousarray(
             flat[:, :, d0:d1, :, :]
         ).reshape(n_years, -1, nlat, nlon)
-        return _thresh_one_day_loo(day_data, pct)   # (n_years, nlat, nlon)
+        return _thresh_one_day(day_data, pct)   # (n_years, nlat, nlon)
 
     results = Parallel(n_jobs=-1, prefer="threads")(
         delayed(_one_day)(d) for d in range(n_days)
     )
     # results[d]: (n_years, nlat, nlon)  →  stack along day axis
     return np.stack(results, axis=1)   # (n_years, n_days, nlat, nlon)
+
+
+# Back-compat alias: behavior is now full-climatology (no LOYO) despite the name.
+compute_daywise_thresholds_loo = compute_daywise_thresholds
 
 
 # ── correlation maps ──────────────────────────────────────────────────────
@@ -354,7 +360,7 @@ def main():
             print("WARNING: no forcing file found — land/ocean split unavailable", flush=True)
 
         yr_range     = f"{YEARS[0]}–{YEARS[-1]}  (n={len(YEARS)} seasons)"
-        thresh_label = f"±{THRESH_WINDOW}-day sliding window thresholds, LOO"
+        thresh_label = f"±{THRESH_WINDOW}-day sliding window thresholds"
 
         plot_global(
             r_map, r_pval, lat, lon,
@@ -400,12 +406,12 @@ def main():
     ace2_all = _load_all_ace2_jja(nlat, nlon)
     print(f"  ace2_all: {ace2_all.shape}  ({ace2_all.nbytes/1e9:.1f} GB)", flush=True)
 
-    print(f"\nComputing ERA5 LOO ±{THRESH_WINDOW}-day sliding thresholds ...", flush=True)
-    era5_thresh = compute_daywise_thresholds_loo(era5_all)   # (n_years, 92, nlat, nlon)
+    print(f"\nComputing ERA5 ±{THRESH_WINDOW}-day climatological thresholds (no LOYO) ...", flush=True)
+    era5_thresh = compute_daywise_thresholds(era5_all)   # (n_years, 92, nlat, nlon)
     print("  ERA5 done.", flush=True)
 
-    print(f"Computing ACE2 LOO ±{THRESH_WINDOW}-day sliding thresholds ...", flush=True)
-    ace2_thresh = compute_daywise_thresholds_loo(ace2_all)
+    print(f"Computing ACE2 ±{THRESH_WINDOW}-day climatological thresholds (no LOYO) ...", flush=True)
+    ace2_thresh = compute_daywise_thresholds(ace2_all)
     print("  ACE2 done.", flush=True)
 
     # Vectorised seasonal frequency — year-specific LOO threshold
@@ -458,7 +464,7 @@ def main():
         print("WARNING: no forcing file found — land/ocean split unavailable", flush=True)
 
     yr_range     = f"{YEARS[0]}–{YEARS[-1]}  (n={len(YEARS)} seasons)"
-    thresh_label = f"±{THRESH_WINDOW}-day sliding window thresholds, LOO"
+    thresh_label = f"±{THRESH_WINDOW}-day sliding window thresholds"
 
     plot_global(
         r_map, r_pval, lat, lon,

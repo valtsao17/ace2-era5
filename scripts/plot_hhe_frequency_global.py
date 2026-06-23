@@ -69,7 +69,7 @@ def main():
     _panel(axes[0], era5_mean, lat, lon, f"ERA5  |  JJA {yr0}-{yr1}", vmax)
     mesh = _panel(axes[1], ace2_mean, lat, lon, f"ACE2  |  JJA {yr0}-{yr1}", vmax)
     fig.colorbar(mesh, ax=axes, shrink=0.7, orientation="vertical",
-                label="Mean JJA HHE frequency (fraction of days, ±7d LOO 90th-pct)")
+                label="Mean JJA HHE frequency (fraction of days, ±7d 90th-pct)")
     fig.suptitle("Climatological JJA heat-extreme frequency  |  no clustering, no skill metric",
                 fontsize=12, y=1.0)
 
