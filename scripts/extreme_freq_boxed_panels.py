@@ -77,13 +77,11 @@ def _panel(ax, field_pct, lat, lon, title, vmax, box=None):
         x1 = lo1 - 360.0 if lo1 > 180 else lo1
         ax.add_patch(Rectangle((x0, la0), x1 - x0, la1 - la0, fill=False,
                                edgecolor="#00b050", linewidth=2.6, zorder=5))
-        ax.text(x0, la1 + 0.6, "highest-concentration box", color="#00b050",
-                fontsize=9, fontweight="bold", zorder=6)
     ax.set_title(title, fontsize=11)
     return im
 
 
-def make_figure(era5, ace2, lat, lon, title, cbar_label, out_png):
+def make_figure(era5, ace2, lat, lon, title, cbar_label, out_png, draw_box=False):
     e_clim = np.nanmean(era5, axis=0) * 100.0   # -> percent of JJA days
     a_clim = np.nanmean(ace2, axis=0) * 100.0
     e = e_clim[CONUS_LAT_SLICE, CONUS_LON_SLICE]
@@ -91,11 +89,13 @@ def make_figure(era5, ace2, lat, lon, title, cbar_label, out_png):
     latc = lat[CONUS_LAT_SLICE]
     lonc = lon[CONUS_LON_SLICE]
 
-    box, box_score = find_box(e, latc, lonc)
-    la0, la1, lo0, lo1 = box
-    print(f"  {out_png.name}: ERA5 box lat {la0:.1f}-{la1:.1f} "
-          f"lon {lo0:.1f}-{lo1:.1f}E ({360-lo1:.0f}-{360-lo0:.0f}°W)  "
-          f"mean={box_score:.2f}% (domain mean {np.nanmean(e):.2f}%)", flush=True)
+    box = None
+    if draw_box:
+        box, box_score = find_box(e, latc, lonc)
+        la0, la1, lo0, lo1 = box
+        print(f"  {out_png.name}: ERA5 box lat {la0:.1f}-{la1:.1f} "
+              f"lon {lo0:.1f}-{lo1:.1f}E ({360-lo1:.0f}-{360-lo0:.0f}°W)  "
+              f"mean={box_score:.2f}% (domain mean {np.nanmean(e):.2f}%)", flush=True)
 
     vmax = float(np.nanpercentile(np.concatenate([e.ravel(), a.ravel()]), 99.0))
     fig, axes = plt.subplots(1, 2, figsize=(15, 4.2))
@@ -118,7 +118,7 @@ def main():
         ace2_raw = d["ace2_freq"].values.astype(np.float32)
     make_figure(
         era5_raw, ace2_raw, lat, lon,
-        "Figure 1 — Raw heat extreme (JJA days > 90th-pct TMP2m), seasonal frequency",
+        "Raw heat extreme (JJA days > 90th-pct TMP2m), seasonal frequency",
         "% of JJA days above 90th percentile",
         OUT_DIR / "fig1_raw_extreme_freq_panels.png",
     )
@@ -131,9 +131,10 @@ def main():
         ace2_hhe = d["ace2_hi_freq"].values.astype(np.float32)
     make_figure(
         era5_hhe, ace2_hhe, lat, lon,
-        "Figure 2 — Humid heat extreme (JJA days with Heat Index ≥ 105°F), seasonal frequency",
+        "Humid heat extreme (JJA days with Heat Index ≥ 105°F), seasonal frequency",
         "% of JJA days with HI ≥ 105°F",
         OUT_DIR / "fig2_hhe_freq_panels.png",
+        draw_box=True,
     )
     print("done.", flush=True)
 
