@@ -111,13 +111,25 @@ def day_precision_recall():
     return prec, rec
 
 
-def _panel(ax, field, lat, lon, title, cmap, vmin, vmax, cbar_label, mean_lbl=None):
+def _stipple(ax, sig, lat, lon):
+    """Black dots at cell centres where `sig` is True (stipple = NOT significant)."""
+    if sig is None or not np.any(sig):
+        return
+    lon_plot = lon - 360.0 if float(lon.mean()) > 180 else lon
+    LON2D, LAT2D = np.meshgrid(lon_plot, lat)
+    ax.scatter(LON2D[sig], LAT2D[sig], s=1.8, c="k", alpha=0.55,
+               linewidths=0, zorder=6)
+
+
+def _panel(ax, field, lat, lon, title, cmap, vmin, vmax, cbar_label, mean_lbl=None,
+           sig=None):
     lon_plot = lon - 360.0 if float(lon.mean()) > 180 else lon
     extent = [float(lon_plot[0]) - 0.5, float(lon_plot[-1]) + 0.5,
               float(lat[0]) - 0.5, float(lat[-1]) + 0.5]
-    ax.set_facecolor("#eef1f4")
+    ax.set_facecolor("white")
     im = ax.imshow(field, origin="lower", extent=extent, aspect="equal",
                    vmin=vmin, vmax=vmax, cmap=cmap, zorder=1, interpolation="nearest")
+    _stipple(ax, sig, lat, lon)
     _plain_map_axes(ax, lon, lat, pad=0.0)
     ax.set_title(title, fontsize=10)
     plt.colorbar(im, ax=ax, shrink=0.85, pad=0.02, label=cbar_label)
@@ -133,6 +145,7 @@ def main():
     with xr.open_dataset(HHE_DIR / "skill_hhe_seasonal.nc") as ds:
         lat = ds["lat"].values[LA]; lon = ds["lon"].values[LO]
         tau = ds["kendall_tau"].values[LA, LO]
+        tau_p = ds["tau_p_value"].values[LA, LO]
         era5_clim = ds["era5_hhe_clim"].values[LA, LO]
     occurs = era5_clim > (1.0 / 92.0)
 
@@ -150,24 +163,27 @@ def main():
     for arr in (tau, zmap, prec, rec):
         arr[~occurs] = np.nan
 
+    # stipple = NOT significant (τ p>=0.05 / |z|<=1.96), only where defined
+    tau_ns = np.isfinite(tau) & ~(np.isfinite(tau_p) & (tau_p < 0.05))
+    z_ns   = np.isfinite(zmap) & (np.abs(zmap) <= 1.96)
+
     tlim = float(np.nanpercentile(np.abs(tau[np.isfinite(tau)]), 98))
     zlim = float(np.nanpercentile(np.abs(zmap[np.isfinite(zmap)]), 98))
     tau_m = cos_lat_mean(tau, lat); z_m = cos_lat_mean(zmap, lat)
     prec_m = cos_lat_mean(prec, lat); rec_m = cos_lat_mean(rec, lat)
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 8.6))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 8.6), constrained_layout=True)
     _panel(axes[0, 0], tau, lat, lon, "Kendall τ  (ACE2 vs ERA5)",
-           _TAU_CMAP, -tlim, tlim, "τ", f"mean τ = {tau_m:.3f}")
+           _TAU_CMAP, -tlim, tlim, "τ", f"mean τ = {tau_m:.3f}", sig=tau_ns)
     _panel(axes[0, 1], zmap, lat, lon, f"Modified-Kendall z  (k={K_TRUNC})",
-           _TAU_CMAP, -zlim, zlim, "z", f"mean z = {z_m:.3f}")
+           _TAU_CMAP, -zlim, zlim, "z", f"mean z = {z_m:.3f}", sig=z_ns)
     _panel(axes[1, 0], prec, lat, lon, "Precision  (day-level HHE)",
            _SKILL_CMAP, 0.0, 1.0, "precision", f"mean = {prec_m:.3f}")
     _panel(axes[1, 1], rec, lat, lon, "Recall  (day-level HHE)",
            _SKILL_CMAP, 0.0, 1.0, "recall", f"mean = {rec_m:.3f}")
-    fig.suptitle("CONUS humid-heat-extreme (HI≥105°F) skill — rank-correlation (top) "
-                 "vs day-level classification (bottom)  |  JJA 1980–2016, seasonal, no-LOO",
-                 fontsize=12, y=0.99)
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.suptitle("CONUS humid-heat-extreme (HI≥105°F) skill — rank-correlation (top, stipple = "
+                 "NOT significant: τ p≥0.05 / |z|≤1.96) vs day-level classification (bottom)  |  "
+                 "JJA 1980–2016, seasonal, no-LOO", fontsize=12)
     out = HHE_DIR / "skill_panel_combined_hhe.png"
     fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)

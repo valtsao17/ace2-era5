@@ -40,13 +40,25 @@ SLIDING_DIR = PROJECT_ROOT / "outputs/lag_may/seasonal_jja_sliding7d"
 MODK_DIR    = PROJECT_ROOT / "outputs/lag_may/seasonal_jja_sliding7d_modkendall"
 
 
-def _panel(ax, field, lat, lon, title, cmap, vmin, vmax, cbar_label, mean_lbl=None):
+def _stipple(ax, sig, lat, lon):
+    """Black dots at cell centres where `sig` is True (p<0.05 / |z|>1.96)."""
+    if sig is None or not np.any(sig):
+        return
+    lon_plot = lon - 360.0 if float(lon.mean()) > 180 else lon
+    LON2D, LAT2D = np.meshgrid(lon_plot, lat)
+    ax.scatter(LON2D[sig], LAT2D[sig], s=1.8, c="k", alpha=0.55,
+               linewidths=0, zorder=6)
+
+
+def _panel(ax, field, lat, lon, title, cmap, vmin, vmax, cbar_label, mean_lbl=None,
+           sig=None):
     lon_plot = lon - 360.0 if float(lon.mean()) > 180 else lon
     extent = [float(lon_plot[0]) - 0.5, float(lon_plot[-1]) + 0.5,
               float(lat[0]) - 0.5, float(lat[-1]) + 0.5]
     im = ax.imshow(field, origin="lower", extent=extent, aspect="equal",
                    vmin=vmin, vmax=vmax, cmap=cmap, zorder=1,
                    interpolation="nearest")
+    _stipple(ax, sig, lat, lon)
     _plain_map_axes(ax, lon, lat, pad=0.0)
     ax.set_title(title, fontsize=10)
     plt.colorbar(im, ax=ax, shrink=0.85, pad=0.02, label=cbar_label)
@@ -58,11 +70,12 @@ def _panel(ax, field, lat, lon, title, cmap, vmin, vmax, cbar_label, mean_lbl=No
 
 
 def main():
-    # Kendall τ
+    # Kendall τ (+ p-value for stippling)
     with xr.open_dataset(SLIDING_DIR / "skill_jja_seasonal.nc") as ds:
         lat = ds["lat"].values[CONUS_LAT_SLICE]
         lon = ds["lon"].values[CONUS_LON_SLICE]
         tau = ds["kendall_tau"].values[CONUS_LAT_SLICE, CONUS_LON_SLICE]
+        tau_p = ds["tau_p_value"].values[CONUS_LAT_SLICE, CONUS_LON_SLICE]
 
     # modified-Kendall z (variable name is kendall_tau but holds z)
     with xr.open_dataset(MODK_DIR / "skill_jja_seasonal.nc") as ds:
@@ -74,6 +87,10 @@ def main():
         prec = ds["precision"].values[CONUS_LAT_SLICE, CONUS_LON_SLICE]
         rec  = ds["recall"].values[CONUS_LAT_SLICE, CONUS_LON_SLICE]
 
+    # NON-significance masks for the rank-correlation panels (stipple = p>=0.05)
+    tau_ns = np.isfinite(tau) & ~(np.isfinite(tau_p) & (tau_p < 0.05))
+    z_ns   = np.isfinite(zmap) & (np.abs(zmap) <= 1.96)       # |z|<=1.96 -> p>=0.05
+
     # symmetric, data-driven limits for the diverging skill panels
     tlim = float(np.nanpercentile(np.abs(tau[np.isfinite(tau)]), 98))
     zlim = float(np.nanpercentile(np.abs(zmap[np.isfinite(zmap)]), 98))
@@ -83,20 +100,19 @@ def main():
     prec_m = cos_lat_mean(prec, lat)
     rec_m  = cos_lat_mean(rec, lat)
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 8.6))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 8.6), constrained_layout=True)
     _panel(axes[0, 0], tau, lat, lon, "Kendall τ  (ACE2 vs ERA5)",
-           _TAU_CMAP, -tlim, tlim, "τ", f"mean τ = {tau_m:.3f}")
+           _TAU_CMAP, -tlim, tlim, "τ", f"mean τ = {tau_m:.3f}", sig=tau_ns)
     _panel(axes[0, 1], zmap, lat, lon, f"Modified-Kendall z  (k={zk})",
-           _TAU_CMAP, -zlim, zlim, "z", f"mean z = {z_m:.3f}")
+           _TAU_CMAP, -zlim, zlim, "z", f"mean z = {z_m:.3f}", sig=z_ns)
     _panel(axes[1, 0], prec, lat, lon, "Precision  (day-level)",
            _SKILL_CMAP, 0.0, 1.0, "precision", f"mean = {prec_m:.3f}")
     _panel(axes[1, 1], rec, lat, lon, "Recall  (day-level)",
            _SKILL_CMAP, 0.0, 1.0, "recall", f"mean = {rec_m:.3f}")
 
-    fig.suptitle("CONUS raw heat-extreme (90th-pct TMP2m) skill — rank-correlation (top) "
-                 "vs day-level classification (bottom)  |  JJA 1980–2016, seasonal, no-LOO",
-                 fontsize=12, y=0.99)
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.suptitle("CONUS raw heat-extreme (90th-pct TMP2m) skill — rank-correlation (top, "
+                 "stipple = NOT significant: τ p≥0.05 / |z|≤1.96) vs day-level classification "
+                 "(bottom)  |  JJA 1980–2016, seasonal, no-LOO", fontsize=12)
     out = MODK_DIR / "skill_panel_combined_raw.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=140, bbox_inches="tight")
