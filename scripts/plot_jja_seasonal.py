@@ -90,11 +90,12 @@ def _roll_to_180(field, lon):
 
 
 def plot_global(field, pval, lat, lon, title, out_path, metric_label):
-    abs_field = np.abs(field)
+    signed = "Kendall" in metric_label
+    plot_field = field if signed else np.abs(field)
     print(f"Plotting {out_path.name} ...", flush=True)
 
     # Roll 0-360 → -180/180
-    abs_field_r, lon_r = _roll_to_180(abs_field, lon)
+    plot_field_r, lon_r = _roll_to_180(plot_field, lon)
     pval_r, _          = _roll_to_180(pval, lon)
     field_r, _         = _roll_to_180(field, lon)
 
@@ -103,8 +104,10 @@ def plot_global(field, pval, lat, lon, title, out_path, metric_label):
 
     # pcolormesh on plain axes
     LON2D, LAT2D = np.meshgrid(lon_r, lat)
-    mesh = ax.pcolormesh(LON2D, LAT2D, abs_field_r,
-                         cmap=_SKILL_CMAP, vmin=0.0, vmax=0.6,
+    cmap = "RdBu_r" if signed else _SKILL_CMAP
+    vmin, vmax = (-1.0, 1.0) if signed else (0.0, 0.6)
+    mesh = ax.pcolormesh(LON2D, LAT2D, plot_field_r,
+                         cmap=cmap, vmin=vmin, vmax=vmax,
                          shading="nearest", zorder=1)
     print("  pcolormesh done", flush=True)
 
@@ -131,9 +134,11 @@ def plot_global(field, pval, lat, lon, title, out_path, metric_label):
     print("  stipple done", flush=True)
 
     # Colorbar, annotations
-    fig.colorbar(mesh, ax=ax, shrink=0.7, label=f"|{metric_label}|")
-    wavg = cos_lat_mean(abs_field, lat)
-    ax.text(0.01, 0.03, f"cos-lat mean |{metric_label}| = {wavg:.3f}",
+    cbar_label = metric_label if signed else f"|{metric_label}|"
+    fig.colorbar(mesh, ax=ax, shrink=0.7, label=cbar_label)
+    wavg = cos_lat_mean(plot_field, lat)
+    mean_label = f"cos-lat mean {cbar_label}"
+    ax.text(0.01, 0.03, f"{mean_label} = {wavg:.3f}",
             transform=ax.transAxes, fontsize=9, va="bottom",
             bbox=dict(facecolor="white", alpha=0.85, edgecolor="none", pad=3))
 

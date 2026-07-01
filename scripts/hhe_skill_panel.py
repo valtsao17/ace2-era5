@@ -31,6 +31,7 @@ import xarray as xr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
@@ -38,9 +39,16 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from cluster_skill_analysis_sliding7d import (
     _plain_map_axes, _TAU_CMAP, CONUS_LAT_SLICE, CONUS_LON_SLICE,
 )
-from seasonal_jja_skill import _SKILL_CMAP, cos_lat_mean
-from mod_kendall_metric import mk_z, DEFAULT_K
+from seasonal_jja_skill import _SKILL_CMAP, cos_lat_mean, load_land_mask, domain_scores_label
+from mod_kendall_metric import mk_z, DEFAULT_K, normalized_z_for_plot
 from heat_index_era5 import heat_index, HI_THRESH
+
+from copy import copy
+# precision is undefined (NaN) where the model never predicts an HHE day
+# (TP+FP=0); draw those cells neutral grey so they're distinct from a genuine 0
+# (the plain _SKILL_CMAP maps both 0 and NaN to white).
+_SKILL_CMAP_NA = copy(_SKILL_CMAP)
+_SKILL_CMAP_NA.set_bad("#bdbdbd")
 from hhe_ace2 import N_MEMBERS, YEARS
 
 HHE_DIR   = PROJECT_ROOT / "outputs/lag_may/heat_index_era5"
@@ -134,10 +142,9 @@ def _panel(ax, field, lat, lon, title, cmap, vmin, vmax, cbar_label, mean_lbl=No
     ax.set_title(title, fontsize=10)
     plt.colorbar(im, ax=ax, shrink=0.85, pad=0.02, label=cbar_label)
     if mean_lbl is not None:
-        ax.text(0.015, 0.04, mean_lbl, transform=ax.transAxes, fontsize=8,
-                va="bottom", ha="left", zorder=7,
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.85,
-                          edgecolor="none", pad=2))
+        ax.legend([Line2D([], [], linestyle="none")], [mean_lbl],
+                  loc="lower left", fontsize=8, handlelength=0, handletextpad=0,
+                  framealpha=1.0, borderpad=0.5).set_zorder(7)
 
 
 def main():
@@ -167,20 +174,38 @@ def main():
     tau_ns = np.isfinite(tau) & ~(np.isfinite(tau_p) & (tau_p < 0.05))
     z_ns   = np.isfinite(zmap) & (np.abs(zmap) <= 1.96)
 
-    tlim = float(np.nanpercentile(np.abs(tau[np.isfinite(tau)]), 98))
-    zlim = float(np.nanpercentile(np.abs(zmap[np.isfinite(zmap)]), 98))
+    z_plot, z_scale = normalized_z_for_plot(zmap)
+    land = load_land_mask(lat, lon)         # all / land / sea score breakdown
     tau_m = cos_lat_mean(tau, lat); z_m = cos_lat_mean(zmap, lat)
+    zn_m = cos_lat_mean(z_plot, lat)
     prec_m = cos_lat_mean(prec, lat); rec_m = cos_lat_mean(rec, lat)
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 8.6), constrained_layout=True)
     _panel(axes[0, 0], tau, lat, lon, "Kendall τ  (ACE2 vs ERA5)",
-           _TAU_CMAP, -tlim, tlim, "τ", f"mean τ = {tau_m:.3f}", sig=tau_ns)
-    _panel(axes[0, 1], zmap, lat, lon, f"Modified-Kendall z  (k={K_TRUNC})",
-           _TAU_CMAP, -zlim, zlim, "z", f"mean z = {z_m:.3f}", sig=z_ns)
+           _TAU_CMAP, -1.0, 1.0, "τ", domain_scores_label("mean τ", tau, lat, land),
+           sig=tau_ns)
+    _panel(axes[0, 1], z_plot, lat, lon, f"Normalized modified-Kendall z  (k={K_TRUNC})",
+           _TAU_CMAP, -1.0, 1.0, "normalized z",
+           domain_scores_label("mean norm z", z_plot, lat, land),
+           sig=z_ns)
     _panel(axes[1, 0], prec, lat, lon, "Precision  (day-level HHE)",
-           _SKILL_CMAP, 0.0, 1.0, "precision", f"mean = {prec_m:.3f}")
+           _SKILL_CMAP_NA, 0.0, 1.0, "precision", domain_scores_label("precision", prec, lat, land))
     _panel(axes[1, 1], rec, lat, lon, "Recall  (day-level HHE)",
-           _SKILL_CMAP, 0.0, 1.0, "recall", f"mean = {rec_m:.3f}")
+           _SKILL_CMAP_NA, 0.0, 1.0, "recall", domain_scores_label("recall", rec, lat, land))
+    # grey = undefined: precision where the model predicted no HHE days
+    # (TP+FP=0); recall where ERA5 observed none (TP+FN=0). Annotate only when
+    # such cells exist.
+    _bbox = dict(boxstyle="round,pad=0.25", fc="white", alpha=0.85, ec="0.6")
+    n_na_p = int(np.sum(~np.isfinite(prec)))
+    if n_na_p:
+        axes[1, 0].text(0.98, 0.03, f"grey = undefined (no predicted\nHHE days): {n_na_p} cells",
+                        transform=axes[1, 0].transAxes, ha="right", va="bottom",
+                        fontsize=7, bbox=_bbox, zorder=7)
+    n_na_r = int(np.sum(~np.isfinite(rec)))
+    if n_na_r:
+        axes[1, 1].text(0.98, 0.03, f"grey = undefined (no observed\nHHE days): {n_na_r} cells",
+                        transform=axes[1, 1].transAxes, ha="right", va="bottom",
+                        fontsize=7, bbox=_bbox, zorder=7)
     fig.suptitle("CONUS humid-heat-extreme (HI≥105°F) skill — rank-correlation (top, stipple = "
                  "NOT significant: τ p≥0.05 / |z|≤1.96) vs day-level classification (bottom)  |  "
                  "JJA 1980–2016, seasonal, no-LOO", fontsize=12)
@@ -196,7 +221,8 @@ def main():
                             "no-LOO, bias-corrected ACE2", "truncation_k": K_TRUNC},
     ).to_netcdf(HHE_DIR / "skill_panel_combined_hhe.nc")
     print(f"wrote {out}", flush=True)
-    print(f"  CONUS means: τ={tau_m:.3f}  z={z_m:.3f}  prec={prec_m:.3f}  rec={rec_m:.3f}",
+    print(f"  CONUS means: τ={tau_m:.3f}  z={z_m:.3f}  norm_z={zn_m:.3f}  "
+          f"z-plot-scale={z_scale:.3f}  prec={prec_m:.3f}  rec={rec_m:.3f}",
           flush=True)
 
 

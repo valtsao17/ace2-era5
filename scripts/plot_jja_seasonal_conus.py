@@ -99,16 +99,20 @@ def cos_lat_mean(field, lat, mask=None):
 
 def plot_conus(r, pval, lat_c, lon_c, title, out_path, land_mask_c):
     lon_min, lon_max, lat_min, lat_max = CONUS_EXTENT
+    signed = "Kendall" in title
 
-    plot_data = np.where(land_mask_c, np.abs(r), np.nan)
+    stat_data = r if signed else np.abs(r)
+    plot_data = np.where(land_mask_c, stat_data, np.nan)
 
     fig, ax = plt.subplots(figsize=(9, 6))
     ax.set_facecolor("white")
 
     extent = [lon_c.min() - 0.5, lon_c.max() + 0.5,
               lat_c.min() - 0.5, lat_c.max() + 0.5]
+    cmap = "RdBu_r" if signed else _SKILL_CMAP
+    vmin, vmax = (-1.0, 1.0) if signed else (0.0, 0.6)
     im = ax.imshow(plot_data, extent=extent, origin="lower",
-                   cmap=_SKILL_CMAP, vmin=0.0, vmax=0.6,
+                   cmap=cmap, vmin=vmin, vmax=vmax,
                    aspect="auto", interpolation="nearest", zorder=1)
 
     _draw_borders(ax, (lon_min - 2, lon_max + 2), (lat_min - 2, lat_max + 2))
@@ -129,9 +133,9 @@ def plot_conus(r, pval, lat_c, lon_c, title, out_path, land_mask_c):
     ax.set_yticklabels([f"{y}°N" for y in lat_ticks], fontsize=8)
     ax.grid(True, linewidth=0.3, color="gray", alpha=0.4, linestyle="--")
 
-    full_mean  = cos_lat_mean(np.abs(r), lat_c, mask=np.isfinite(r))
-    land_mean  = cos_lat_mean(np.abs(r), lat_c, mask=land_mask_c & np.isfinite(r))
-    ocean_mean = cos_lat_mean(np.abs(r), lat_c, mask=(~land_mask_c) & np.isfinite(r))
+    full_mean  = cos_lat_mean(stat_data, lat_c, mask=np.isfinite(r))
+    land_mean  = cos_lat_mean(stat_data, lat_c, mask=land_mask_c & np.isfinite(r))
+    ocean_mean = cos_lat_mean(stat_data, lat_c, mask=(~land_mask_c) & np.isfinite(r))
     txt = f"full={full_mean:.3f}   land={land_mean:.3f}   ocean={ocean_mean:.3f}"
     ax.text(0.98, 0.04, txt, transform=ax.transAxes,
             ha="right", va="bottom", fontsize=9, fontweight="bold",
@@ -141,7 +145,7 @@ def plot_conus(r, pval, lat_c, lon_c, title, out_path, land_mask_c):
     cbar = plt.colorbar(im, ax=ax, orientation="horizontal",
                         shrink=0.65, pad=0.07, aspect=30)
     cbar.set_label(metric_label, fontsize=9)
-    ticks = np.arange(0, 0.61, 0.06)
+    ticks = np.linspace(-1.0, 1.0, 9) if signed else np.arange(0, 0.61, 0.06)
     cbar.set_ticks(ticks)
     cbar.ax.set_xticklabels([f"{t:.2f}" for t in ticks], fontsize=7)
 

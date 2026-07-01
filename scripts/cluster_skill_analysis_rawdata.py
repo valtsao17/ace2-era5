@@ -179,15 +179,12 @@ def plot_cluster_tau_map(tau_map, labels_2d, tau_cl, tau_domain, lat, lon, title
     diverging blue-white-red scale, the numeric (signed) τ labeled at the
     cluster centroid, and the domain-mean τ called out in a corner annotation.
 
-    vmax auto-scales to the data when not given: cluster-aggregated τ runs
-    much higher than grid-point τ (e.g. ~0.4 at the pixel level vs ~0.8 for
-    a 2-cluster split), so a fixed scale saturates and washes out low-k
-    cluster maps. vmin defaults to -vmax for a zero-centered diverging scale.
+    Kendall τ defaults to its full [-1, 1] range so tau maps can be compared
+    directly with normalized modified-Kendall panels.
     """
     cmap = cmap if cmap is not None else _TAU_CMAP
     if vmax is None:
-        finite = tau_map[np.isfinite(tau_map)]
-        vmax = max(float(np.nanmax(np.abs(finite))) * 1.05, 0.05) if finite.size else 0.4
+        vmax = 1.0
     if vmin is None:
         vmin = -vmax
     if len(lat) < 170:
@@ -552,7 +549,7 @@ def plot_tau_vs_size(tau_cl, sizes, title, out):
     ok = (sizes > 0) & np.isfinite(tau_cl)
     fig, ax = plt.subplots(figsize=(7, 5))
     sc = ax.scatter(sizes[ok], tau_cl[ok], c=tau_cl[ok], cmap=_TAU_CMAP,
-                    alpha=0.6, s=20, vmin=-0.5, vmax=0.5)
+                    alpha=0.6, s=20, vmin=-1.0, vmax=1.0)
     ax.axhline(0, color="0.5", linewidth=0.8, linestyle="--")
     ax.set_xlabel("Cluster size (n valid grid points)")
     ax.set_ylabel("Cluster Kendall τ")
@@ -576,7 +573,7 @@ def plot_comparison(km_results, som_results, redcap_results,
          f"K-means τ  k={km_opt['k']}  (τ={km_opt['tau_domain']:.3f})",
          f"SOM τ  {som_opt['m']}×{som_opt['n']}  (τ={som_opt['tau_domain']:.3f})"],
         lat, lon, OUT_DIR / "tau_comparison_maps.png",
-        vmin=-0.4, vmax=0.4, cmap=_TAU_CMAP, cbar_label="τ",
+        vmin=-1.0, vmax=1.0, cmap=_TAU_CMAP, cbar_label="τ",
     )
 
     km_labels_full = _expand_labels(km_opt["labels"], valid_mask, n_lat, n_lon)

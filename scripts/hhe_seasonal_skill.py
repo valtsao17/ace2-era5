@@ -111,20 +111,20 @@ def main():
     # individual global + CONUS τ maps (reuse the equal-aspect renderer)
     _single_map_figure(tau, lat, lon,
                        "Seasonal HHE-frequency skill — Kendall τ  (ACE2 vs ERA5, HI≥105°F)",
-                       -0.6, 0.6, _TAU_CMAP, "τ",
+                       -1.0, 1.0, _TAU_CMAP, "τ",
                        HHE_DIR / "hhe_seasonal_tau_global.png")
     tau_c = tau[CONUS_LAT_SLICE, CONUS_LON_SLICE]
     latc, lonc = lat[CONUS_LAT_SLICE], lon[CONUS_LON_SLICE]
     _single_map_figure(tau_c, latc, lonc,
                        "CONUS seasonal HHE-frequency skill — Kendall τ  (HI≥105°F)",
-                       -0.6, 0.6, _TAU_CMAP, "τ",
+                       -1.0, 1.0, _TAU_CMAP, "τ",
                        HHE_DIR / "hhe_seasonal_tau_conus.png")
 
     # combined panel: global τ | CONUS τ | CONUS r
     r_c = r[CONUS_LAT_SLICE, CONUS_LON_SLICE]
     fig, axes = plt.subplots(1, 3, figsize=(21, 5.2))
-    _panel(axes[0], tau, lat, lon, f"Global τ  (HHE-cells mean={tau_hhe:.2f})", -0.6, 0.6, "τ")
-    _panel(axes[1], tau_c, latc, lonc, f"CONUS τ  (mean={tau_conus:.2f})", -0.6, 0.6, "τ")
+    _panel(axes[0], tau, lat, lon, f"Global τ  (HHE-cells mean={tau_hhe:.2f})", -1.0, 1.0, "τ")
+    _panel(axes[1], tau_c, latc, lonc, f"CONUS τ  (mean={tau_conus:.2f})", -1.0, 1.0, "τ")
     _panel(axes[2], r_c, latc, lonc, f"CONUS Pearson r  (mean={r_conus:.2f})", -0.8, 0.8, "r")
     fig.suptitle("True HHE (HI≥105°F) seasonal-frequency forecast skill — ACE2 vs ERA5, 37 JJA year-pairs",
                  fontsize=13, y=1.0)

@@ -26,6 +26,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.lines import Line2D
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
@@ -33,7 +34,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from cluster_skill_analysis_sliding7d import (
     _plain_map_axes, _TAU_CMAP, CONUS_LAT_SLICE, CONUS_LON_SLICE,
 )
-from seasonal_jja_skill import cos_lat_mean
+from seasonal_jja_skill import cos_lat_mean, load_land_mask, domain_scores_label
+from mod_kendall_metric import normalized_z_for_plot
 
 HHE_DIR = PROJECT_ROOT / "outputs/lag_may/heat_index_era5"
 LA, LO  = CONUS_LAT_SLICE, CONUS_LON_SLICE
@@ -64,10 +66,9 @@ def _panel(ax, field, lat, lon, title, cmap, vmin, vmax, cbar_label, sig=None,
     ax.set_title(title, fontsize=10)
     plt.colorbar(im, ax=ax, shrink=0.85, pad=0.02, label=cbar_label)
     if mean_lbl is not None:
-        ax.text(0.015, 0.04, mean_lbl, transform=ax.transAxes, fontsize=8,
-                va="bottom", ha="left", zorder=7,
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.85,
-                          edgecolor="none", pad=2))
+        ax.legend([Line2D([], [], linestyle="none")], [mean_lbl],
+                  loc="lower left", fontsize=8, handlelength=0, handletextpad=0,
+                  framealpha=1.0, borderpad=0.5).set_zorder(7)
 
 
 def main():
@@ -90,20 +91,20 @@ def main():
     # show the frequency only where HHE skill is defined (parallels τ/z mask)
     era5_freq = np.where(np.isfinite(tau), era5_freq, np.nan)
 
-    tlim = float(np.nanpercentile(np.abs(tau[np.isfinite(tau)]), 98))
-    zlim = float(np.nanpercentile(np.abs(zmap[np.isfinite(zmap)]), 98))
+    z_plot, z_scale = normalized_z_for_plot(zmap)
     ffin = era5_freq[np.isfinite(era5_freq)]
     fmax = float(np.nanpercentile(ffin, 98)) if ffin.size else 1.0
 
+    land = load_land_mask(lat, lon)         # all / land / sea score breakdown
     fig, axes = plt.subplots(1, 3, figsize=(20, 5), constrained_layout=True)
     _panel(axes[0], era5_freq, lat, lon, "Mean ERA5 JJA HHE frequency (HI≥105°F)",
            WRED, 0.0, fmax, "% of JJA days")
-    tau_m = cos_lat_mean(tau, lat)
-    z_m   = cos_lat_mean(zmap, lat)
     _panel(axes[1], tau, lat, lon, "Kendall τ  (ACE2 vs ERA5)",
-           _TAU_CMAP, -tlim, tlim, "τ", sig=tau_ns, mean_lbl=f"mean τ = {tau_m:.3f}")
-    _panel(axes[2], zmap, lat, lon, f"Modified-Kendall z  (k={zk})",
-           _TAU_CMAP, -zlim, zlim, "z", sig=z_ns, mean_lbl=f"mean z = {z_m:.3f}")
+           _TAU_CMAP, -1.0, 1.0, "τ", sig=tau_ns,
+           mean_lbl=domain_scores_label("mean τ", tau, lat, land))
+    _panel(axes[2], z_plot, lat, lon, f"Normalized modified-Kendall z  (k={zk})",
+           _TAU_CMAP, -1.0, 1.0, "normalized z", sig=z_ns,
+           mean_lbl=domain_scores_label("mean norm z", z_plot, lat, land))
     fig.suptitle("CONUS true-HHE (HI≥105°F) seasonal frequency vs. rank-correlation skill  |  "
                  "37 JJA year-pairs, no-LOO  (stipple = NOT significant: τ p≥0.05 / |z|≤1.96)",
                  fontsize=13)
@@ -111,7 +112,7 @@ def main():
     fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out}", flush=True)
-    print(f"  freq max≈{fmax:.2f}%  τ-lim≈{tlim:.2f}  z-lim≈{zlim:.2f}  "
+    print(f"  freq max≈{fmax:.2f}%  τ-lim=1.00  z-plot-scale≈{z_scale:.2f}  "
           f"τ-nonsig cells={int(tau_ns.sum())}  z-nonsig cells={int(z_ns.sum())}", flush=True)
 
 

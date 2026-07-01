@@ -27,6 +27,7 @@ import xarray as xr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
@@ -34,10 +35,23 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from cluster_skill_analysis_sliding7d import (
     _plain_map_axes, _TAU_CMAP, CONUS_LAT_SLICE, CONUS_LON_SLICE,
 )
-from seasonal_jja_skill import _SKILL_CMAP, cos_lat_mean
+from seasonal_jja_skill import _SKILL_CMAP, cos_lat_mean, load_land_mask, domain_scores_label
+from mod_kendall_metric import normalized_z_for_plot
+
+from copy import copy
 
 SLIDING_DIR = PROJECT_ROOT / "outputs/lag_may/seasonal_jja_sliding7d"
 MODK_DIR    = PROJECT_ROOT / "outputs/lag_may/seasonal_jja_sliding7d_modkendall"
+
+# Skill colormap that draws UNDEFINED cells (NaN) in a distinct neutral grey
+# instead of white. For precision this matters: a cell where the model never
+# predicts a heavy day has TP+FP=0 -> precision is undefined (0/0), which is
+# physically different from a genuine precision of 0. With the plain _SKILL_CMAP
+# (value 0 = white AND set_bad("white")) the two are indistinguishable; here the
+# undefined cells render grey so "no predicted heavy days" reads as no-data, not
+# as a perfect/zero score.
+_SKILL_CMAP_NA = copy(_SKILL_CMAP)
+_SKILL_CMAP_NA.set_bad("#bdbdbd")
 
 
 def _stipple(ax, sig, lat, lon):
@@ -63,10 +77,9 @@ def _panel(ax, field, lat, lon, title, cmap, vmin, vmax, cbar_label, mean_lbl=No
     ax.set_title(title, fontsize=10)
     plt.colorbar(im, ax=ax, shrink=0.85, pad=0.02, label=cbar_label)
     if mean_lbl is not None:
-        ax.text(0.015, 0.04, mean_lbl, transform=ax.transAxes, fontsize=8,
-                va="bottom", ha="left", zorder=7,
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.85,
-                          edgecolor="none", pad=2))
+        ax.legend([Line2D([], [], linestyle="none")], [mean_lbl],
+                  loc="lower left", fontsize=8, handlelength=0, handletextpad=0,
+                  framealpha=1.0, borderpad=0.5).set_zorder(7)
 
 
 def main():
@@ -91,24 +104,46 @@ def main():
     tau_ns = np.isfinite(tau) & ~(np.isfinite(tau_p) & (tau_p < 0.05))
     z_ns   = np.isfinite(zmap) & (np.abs(zmap) <= 1.96)       # |z|<=1.96 -> p>=0.05
 
-    # symmetric, data-driven limits for the diverging skill panels
-    tlim = float(np.nanpercentile(np.abs(tau[np.isfinite(tau)]), 98))
-    zlim = float(np.nanpercentile(np.abs(zmap[np.isfinite(zmap)]), 98))
+    # symmetric, data-driven limits for tau; modified-Kendall z is normalized
+    # to [-1, 1] for plotting so its color scale matches bounded tau.
+    z_plot, z_scale = normalized_z_for_plot(zmap)
 
+    land = load_land_mask(lat, lon)         # all / land / sea score breakdown
     tau_m  = cos_lat_mean(tau, lat)
     z_m    = cos_lat_mean(zmap, lat)
+    zn_m   = cos_lat_mean(z_plot, lat)
     prec_m = cos_lat_mean(prec, lat)
     rec_m  = cos_lat_mean(rec, lat)
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 8.6), constrained_layout=True)
     _panel(axes[0, 0], tau, lat, lon, "Kendall τ  (ACE2 vs ERA5)",
-           _TAU_CMAP, -tlim, tlim, "τ", f"mean τ = {tau_m:.3f}", sig=tau_ns)
-    _panel(axes[0, 1], zmap, lat, lon, f"Modified-Kendall z  (k={zk})",
-           _TAU_CMAP, -zlim, zlim, "z", f"mean z = {z_m:.3f}", sig=z_ns)
+           _TAU_CMAP, -1.0, 1.0, "τ", domain_scores_label("mean τ", tau, lat, land),
+           sig=tau_ns)
+    _panel(axes[0, 1], z_plot, lat, lon, f"Normalized modified-Kendall z  (k={zk})",
+           _TAU_CMAP, -1.0, 1.0, "normalized z",
+           domain_scores_label("mean norm z", z_plot, lat, land),
+           sig=z_ns)
     _panel(axes[1, 0], prec, lat, lon, "Precision  (day-level)",
-           _SKILL_CMAP, 0.0, 1.0, "precision", f"mean = {prec_m:.3f}")
+           _SKILL_CMAP_NA, 0.0, 1.0, "precision", domain_scores_label("precision", prec, lat, land))
     _panel(axes[1, 1], rec, lat, lon, "Recall  (day-level)",
-           _SKILL_CMAP, 0.0, 1.0, "recall", f"mean = {rec_m:.3f}")
+           _SKILL_CMAP_NA, 0.0, 1.0, "recall", domain_scores_label("recall", rec, lat, land))
+    # flag what the neutral grey means (undefined precision: TP+FP=0, i.e. the
+    # model never predicted a heavy day there — distinct from a genuine 0).
+    # grey = undefined: precision where the model predicted no heavy days
+    # (TP+FP=0); recall where ERA5 observed none (TP+FN=0). Only annotate when
+    # such cells exist (a per-cell 90th-pct threshold guarantees observed events
+    # everywhere, so recall here has none).
+    _bbox = dict(boxstyle="round,pad=0.25", fc="white", alpha=0.85, ec="0.6")
+    n_na_p = int(np.sum(~np.isfinite(prec)))
+    if n_na_p:
+        axes[1, 0].text(0.98, 0.03, f"grey = undefined (no predicted\nheavy days): {n_na_p} cells",
+                        transform=axes[1, 0].transAxes, ha="right", va="bottom",
+                        fontsize=7, bbox=_bbox, zorder=7)
+    n_na_r = int(np.sum(~np.isfinite(rec)))
+    if n_na_r:
+        axes[1, 1].text(0.98, 0.03, f"grey = undefined (no observed\nheavy days): {n_na_r} cells",
+                        transform=axes[1, 1].transAxes, ha="right", va="bottom",
+                        fontsize=7, bbox=_bbox, zorder=7)
 
     fig.suptitle("CONUS raw heat-extreme (90th-pct TMP2m) skill — rank-correlation (top, "
                  "stipple = NOT significant: τ p≥0.05 / |z|≤1.96) vs day-level classification "
@@ -118,7 +153,8 @@ def main():
     fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out}", flush=True)
-    print(f"  CONUS means: τ={tau_m:.3f}  z={z_m:.3f}  prec={prec_m:.3f}  rec={rec_m:.3f}",
+    print(f"  CONUS means: τ={tau_m:.3f}  z={z_m:.3f}  norm_z={zn_m:.3f}  "
+          f"z_plot_scale={z_scale:.3f}  prec={prec_m:.3f}  rec={rec_m:.3f}",
           flush=True)
 
 

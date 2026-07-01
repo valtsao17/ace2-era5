@@ -26,7 +26,8 @@ import yaml
 
 YEARS = list(range(1980, 2017))
 N_MEMBERS = 25
-N_STEPS = 400   # 100 days at 6 h; covers Aug 1 from Apr 28 (earliest member) with buffer
+N_STEPS = 500   # 125 days at 6 h; covers Aug 31 from May 4 (latest member) with buffer
+                # (was 400 = 100 d, which only reached ~Aug 9 for the common window)
 
 
 def lag_times(year: int) -> list[datetime]:
@@ -59,6 +60,10 @@ def parse_args():
                    help="'all' or comma-separated years, e.g. '1980,1981'")
     p.add_argument("--members", default="all",
                    help="'all' or comma-separated member indices")
+    p.add_argument("--n-steps", type=int, default=N_STEPS,
+                   help=f"Number of 6-hourly forward steps (default: {N_STEPS})")
+    p.add_argument("--writer-names", default="TMP2m,Q2m,PRESsfc",
+                   help="Comma-separated prediction variables to save")
     return p.parse_args()
 
 
@@ -76,10 +81,11 @@ def resolve_paths(args):
 
 
 def build_config(member_dir: Path, ic_path: Path, forcing_dir: Path,
-                 ckpt: Path, init_time: datetime, fsim: int) -> dict:
+                 ckpt: Path, init_time: datetime, fsim: int,
+                 n_steps: int, writer_names: list[str]) -> dict:
     return {
         "experiment_dir": str(member_dir.resolve()),
-        "n_forward_steps": N_STEPS,
+        "n_forward_steps": n_steps,
         "forward_steps_in_memory": fsim,
         "checkpoint_path": str(ckpt),
         "logging": {
@@ -102,22 +108,22 @@ def build_config(member_dir: Path, ic_path: Path, forcing_dir: Path,
             # TMP2m + Q2m (2m specific humidity) + PRESsfc (surface pressure)
             # → enough to derive 2m relative humidity for the heat-index / HHE
             # analysis (HI from Tmax & RHmin). TMP2m alone was saved originally.
-            "names": ["TMP2m", "Q2m", "PRESsfc"],
+            "names": writer_names,
         },
         "n_ensemble_per_ic": 1,
         "allow_incompatible_dataset": False,
     }
 
 
-def member_complete(member_dir: Path) -> bool:
+def member_complete(member_dir: Path, n_steps: int, writer_names: list[str]) -> bool:
     pred = member_dir / "autoregressive_predictions.nc"
     if not pred.exists() or pred.stat().st_size == 0:
         return False
     try:
         import xarray as xr
         with xr.open_dataset(pred, decode_times=False) as ds:
-            needed = {"TMP2m", "Q2m", "PRESsfc"}
-            return needed.issubset(ds.data_vars) and ds.sizes.get("time", 0) >= N_STEPS
+            needed = set(writer_names)
+            return needed.issubset(ds.data_vars) and ds.sizes.get("time", 0) >= n_steps
     except Exception:
         return False
 
@@ -125,15 +131,23 @@ def member_complete(member_dir: Path) -> bool:
 def run_one(python: str, wrapper: Path, member_dir: Path,
             ic_path: Path, forcing_dir: Path, ckpt: Path,
             init_time: datetime, fsim: int,
+            n_steps: int, writer_names: list[str],
             gpu_id: int, dry_run: bool) -> tuple[str, bool]:
     label = f"[{member_dir.parent.name} {member_dir.name}]"
     member_dir.mkdir(parents=True, exist_ok=True)
 
-    cfg = build_config(member_dir, ic_path, forcing_dir, ckpt, init_time, fsim)
+    cfg = build_config(
+        member_dir, ic_path, forcing_dir, ckpt, init_time, fsim,
+        n_steps, writer_names,
+    )
     config_path = member_dir / "config.yaml"
     config_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
 
-    print(f"{label} init={init_time.isoformat()} steps={N_STEPS} gpu={gpu_id}", flush=True)
+    print(
+        f"{label} init={init_time.isoformat()} steps={n_steps} "
+        f"vars={','.join(writer_names)} gpu={gpu_id}",
+        flush=True,
+    )
 
     if dry_run:
         print(f"  DRY: CUDA_VISIBLE_DEVICES={gpu_id} {python} {wrapper} {config_path}")
@@ -177,6 +191,10 @@ def main():
         list(range(N_MEMBERS)) if args.members == "all"
         else [int(x) for x in args.members.split(",")]
     )
+    writer_names = [x.strip() for x in args.writer_names.split(",") if x.strip()]
+    if not writer_names:
+        print("ERROR: --writer-names must include at least one variable", file=sys.stderr)
+        sys.exit(1)
 
     jobs = []
     for year in years:
@@ -192,7 +210,7 @@ def main():
         times = lag_times(year)
         for idx in members:
             member_dir = out_dir / str(year) / f"member_{idx:02d}"
-            if args.skip_existing and member_complete(member_dir):
+            if args.skip_existing and member_complete(member_dir, args.n_steps, writer_names):
                 print(f"[{year} member_{idx:02d}] skip", flush=True)
                 continue
             jobs.append((year, idx, times[idx], ic_path))
@@ -209,7 +227,8 @@ def main():
             label, ok = run_one(
                 args.python, wrapper, member_dir,
                 ic_path, forcing_dir, ckpt, init_time,
-                args.forward_steps_in_memory, gpu_id=0, dry_run=args.dry_run,
+                args.forward_steps_in_memory, args.n_steps, writer_names,
+                gpu_id=0, dry_run=args.dry_run,
             )
             if not ok:
                 failures.append(label)
@@ -222,7 +241,8 @@ def main():
             return run_one(
                 args.python, wrapper, member_dir,
                 ic_path, forcing_dir, ckpt, init_time,
-                args.forward_steps_in_memory, gpu_id=gpu_id, dry_run=args.dry_run,
+                args.forward_steps_in_memory, args.n_steps, writer_names,
+                gpu_id=gpu_id, dry_run=args.dry_run,
             )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.n_gpus) as pool:

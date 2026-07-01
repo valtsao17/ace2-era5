@@ -30,7 +30,7 @@ from joblib import Parallel, delayed
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from mod_kendall_metric import mk_z, DEFAULT_K
+from mod_kendall_metric import mk_z, DEFAULT_K, normalized_z_for_plot
 from cluster_skill_analysis_sliding7d import (
     _single_map_figure, _TAU_CMAP, CONUS_LAT_SLICE, CONUS_LON_SLICE,
 )
@@ -92,26 +92,24 @@ def main():
     xr.Dataset({"kendall_tau": da, "mod_kendall_z": da}).to_netcdf(out_nc)
     print(f"wrote {out_nc}", flush=True)
 
-    # symmetric, data-driven color scale (z is unbounded)
-    finite = z_map[np.isfinite(z_map)]
-    vmax = float(np.nanpercentile(np.abs(finite), 98)) if finite.size else 4.0
-    label = f"mod-Kendall z (k={k})"
+    # Plot normalized z on [-1, 1] so the color scale is comparable to tau.
+    z_plot, z_scale = normalized_z_for_plot(z_map)
+    label = f"normalized mod-Kendall z (k={k})"
 
-    _single_map_figure(z_map, lat, lon,
-                       f"Grid-point modified-Kendall z  (k={k})  |  ACE2 vs ERA5 JJA HHE freq",
-                       -vmax, vmax, _TAU_CMAP, label,
+    _single_map_figure(z_plot, lat, lon,
+                       f"Grid-point normalized modified-Kendall z  (k={k})  |  ACE2 vs ERA5 JJA HHE freq",
+                       -1.0, 1.0, _TAU_CMAP, label,
                        OUT_DIR / "tau_jja_seasonal_global_modkendall.png")
 
     zc = z_map[CONUS_LAT_SLICE, CONUS_LON_SLICE]
+    zc_plot, zc_scale = normalized_z_for_plot(zc)
     latc, lonc = lat[CONUS_LAT_SLICE], lon[CONUS_LON_SLICE]
-    fc = zc[np.isfinite(zc)]
-    vmaxc = float(np.nanpercentile(np.abs(fc), 98)) if fc.size else vmax
-    _single_map_figure(zc, latc, lonc,
-                       f"CONUS grid-point modified-Kendall z  (k={k})",
-                       -vmaxc, vmaxc, _TAU_CMAP, label,
+    _single_map_figure(zc_plot, latc, lonc,
+                       f"CONUS grid-point normalized modified-Kendall z  (k={k})",
+                       -1.0, 1.0, _TAU_CMAP, label,
                        OUT_DIR / "tau_jja_seasonal_conus_modkendall.png")
 
-    print("done.", flush=True)
+    print(f"done. normalized z plot scales: global={z_scale:.3f}, CONUS={zc_scale:.3f}", flush=True)
 
 
 if __name__ == "__main__":

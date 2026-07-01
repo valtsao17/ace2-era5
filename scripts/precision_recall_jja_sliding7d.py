@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Grid-point precision/recall for JJA HHE day-level classification, no clustering.
 
-Positive event = ERA5 day exceeds its LOO ±7-day 90th-pct threshold (the same
+Positive event = ERA5 day exceeds its no-LOYO ±7-day 90th-pct threshold (the same
 HHE definition used everywhere else in this project, see seasonal_jja_skill.py).
 ACE2's predicted class for that day = majority vote across the 25-member
-ensemble (>=50% of members exceed their own LOO threshold that day).
+ensemble (>=50% of members exceed their own no-LOYO threshold that day).
 
 Pooled across all 37 years x 92 JJA days per grid cell:
     precision = TP / (TP + FP)
@@ -38,7 +38,7 @@ import matplotlib.pyplot as plt
 
 from seasonal_jja_skill import (
     YEARS, COMBINED_DIR,
-    _load_all_era5_jja, _load_all_ace2_jja, compute_daywise_thresholds_loo,
+    _load_all_era5_jja, _load_all_ace2_jja, compute_daywise_thresholds,
     cos_lat_mean, _roll_to_180, _draw_coast, _SKILL_CMAP,
 )
 
@@ -91,12 +91,12 @@ def main():
     ace2_all = _load_all_ace2_jja(nlat, nlon)
     print(f"  ace2_all: {ace2_all.shape}  ({ace2_all.nbytes/1e9:.1f} GB)", flush=True)
 
-    print("Computing ERA5 LOO +/-7d sliding thresholds ...", flush=True)
-    era5_thresh = compute_daywise_thresholds_loo(era5_all)
+    print("Computing ERA5 no-LOYO +/-7d sliding thresholds ...", flush=True)
+    era5_thresh = compute_daywise_thresholds(era5_all)
     print("  ERA5 done.", flush=True)
 
-    print("Computing ACE2 LOO +/-7d sliding thresholds ...", flush=True)
-    ace2_thresh = compute_daywise_thresholds_loo(ace2_all)
+    print("Computing ACE2 no-LOYO +/-7d sliding thresholds ...", flush=True)
+    ace2_thresh = compute_daywise_thresholds(ace2_all)
     print("  ACE2 done.", flush=True)
 
     tp = np.zeros((nlat, nlon), dtype=np.int64)
@@ -132,7 +132,7 @@ def main():
             "fn": (("lat", "lon"), fn), "tn": (("lat", "lon"), tn),
         },
         coords={"lat": lat, "lon": lon},
-        attrs={"long_name": "Day-level HHE precision/recall, ERA5 obs vs ACE2 majority-vote (>=13/25 members), JJA 1980-2016"},
+        attrs={"long_name": "Day-level HHE precision/recall, ERA5 obs vs ACE2 majority-vote (>=13/25 members), no-LOYO +/-7d thresholds, JJA 1980-2016"},
     ).to_netcdf(OUT_DIR / "precision_recall_jja_seasonal.nc")
     print(f"wrote: {OUT_DIR / 'precision_recall_jja_seasonal.nc'}", flush=True)
 

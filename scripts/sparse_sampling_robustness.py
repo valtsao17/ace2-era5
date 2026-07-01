@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Robustness of the HHE seasonal-frequency skill to *non-consecutive* day sampling.
 
-Motivation: the JJA HHE definition uses a ±7-day LOO sliding-window
+Motivation: the JJA HHE definition uses a ±7-day no-LOYO sliding-window
 threshold, so neighbouring days are strongly autocorrelated — a hot spell paints
 a run of consecutive "extreme" days that are not independent samples. If the
 ACE2-vs-ERA5 rank-correlation skill (Kendall τ on the 37-year seasonal
@@ -10,7 +10,7 @@ from only a *sparse, non-consecutive* subset of JJA days instead of all 92.
 
 Method
 ------
-1. Load the full day-level arrays and the ±7d LOO thresholds exactly as
+1. Load the full day-level arrays and the ±7d no-LOYO thresholds exactly as
    seasonal_jja_skill.py does, and reduce to per-year per-day exceedance:
        era5_exc[i]     = (ERA5_day > thr)                         (92,lat,lon) bool
        ace2_dayfrac[i] = mean_members(ACE2_day > thr)             (92,lat,lon) float
@@ -47,7 +47,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from seasonal_jja_skill import (
     YEARS, COMBINED_DIR,
-    _load_all_era5_jja, _load_all_ace2_jja, compute_daywise_thresholds_loo,
+    _load_all_era5_jja, _load_all_ace2_jja, compute_daywise_thresholds,
     kendall_tau_map, cos_lat_mean,
 )
 from cluster_skill_analysis_sliding7d import (
@@ -100,9 +100,9 @@ def main():
     era5_all = _load_all_era5_jja(nlat, nlon)
     print("Loading ACE2 JJA ...", flush=True)
     ace2_all = _load_all_ace2_jja(nlat, nlon)
-    print("Computing ±7d LOO thresholds ...", flush=True)
-    era5_thr = compute_daywise_thresholds_loo(era5_all)
-    ace2_thr = compute_daywise_thresholds_loo(ace2_all)
+    print("Computing ±7d no-LOYO thresholds ...", flush=True)
+    era5_thr = compute_daywise_thresholds(era5_all)
+    ace2_thr = compute_daywise_thresholds(ace2_all)
 
     # reduce to per-day exceedance, then free the heavy float arrays
     print("Reducing to per-day exceedance ...", flush=True)
@@ -186,7 +186,7 @@ def main():
     tf = tau_full[CONUS_LAT_SLICE, CONUS_LON_SLICE]
     ts = tau_stride8[CONUS_LAT_SLICE, CONUS_LON_SLICE]
     td = ts - tf
-    tlim = float(np.nanpercentile(np.abs(np.r_[tf[np.isfinite(tf)], ts[np.isfinite(ts)]]), 98))
+    tlim = 1.0
     dlim = max(float(np.nanpercentile(np.abs(td[np.isfinite(td)]), 98)), 1e-3)
     lon_plot = clon - 360.0 if float(clon.mean()) > 180 else clon
     ext = [float(lon_plot[0]) - 0.5, float(lon_plot[-1]) + 0.5,

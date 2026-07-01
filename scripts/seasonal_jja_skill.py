@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""JJA seasonal heat-extreme skill map — seasonal-frequency, LOO, ±7-day window.
+"""JJA seasonal heat-extreme skill map — seasonal-frequency, ±7-day window.
 
 For each init year Y:
-  - Threshold: 90th pct of a ±THRESH_WINDOW sliding window, leave-one-out
-    (all years except Y pooled), computed separately for ERA5 and ACE2.
-  - ACE2 seasonal freq: fraction of (member × JJA day) pairs where Tmax > ACE2 threshold[Y]
-  - ERA5 seasonal freq: fraction of JJA days where ERA5 Tmax > ERA5 threshold[Y]
+  - Threshold: 90th pct of a ±THRESH_WINDOW sliding window, pooled across all
+    years, computed separately for ERA5 and ACE2.
+  - ACE2 seasonal freq: fraction of (member × JJA day) pairs where Tmax > ACE2 threshold.
+  - ERA5 seasonal freq: fraction of JJA days where ERA5 Tmax > ERA5 threshold.
   Pearson r and Kendall τ of those two time-series across years at each grid cell.
 
 Outputs → outputs/lag_may/seasonal_jja_sliding7d/
@@ -14,6 +14,7 @@ Outputs → outputs/lag_may/seasonal_jja_sliding7d/
 from __future__ import annotations
 
 from pathlib import Path
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -132,7 +133,7 @@ def _load_all_ace2_jja(nlat: int, nlon: int) -> np.ndarray:
     return arr
 
 
-# ── LOO sliding-window thresholds ─────────────────────────────────────────
+# ── Sliding-window thresholds ─────────────────────────────────────────────
 
 def _thresh_one_day(day_data: np.ndarray, pct: float) -> np.ndarray:
     """Full-climatology pct threshold for one JJA day position (no LOYO).
@@ -145,10 +146,14 @@ def _thresh_one_day(day_data: np.ndarray, pct: float) -> np.ndarray:
     Returns  : (n_years, nlat, nlon)  (one threshold broadcast over years)
     """
     n_years, n_samp, nlat, nlon = day_data.shape
-    pool   = day_data.reshape(-1, nlat, nlon)          # all years pooled (no leave-out)
-    n_pool = pool.shape[0]
-    k      = min(n_pool - 1, max(0, int(np.floor(pct / 100.0 * n_pool))))
-    thr    = np.partition(pool, k, axis=0)[k]          # (nlat, nlon)
+    pool = day_data.reshape(-1, nlat, nlon)          # all years pooled (no leave-out)
+    # Missing member/day samples are possible when older May rollouts do not
+    # cover the full JJA season. Ignore them when defining the percentile
+    # threshold; otherwise missing values can turn the top-decile frequency into
+    # an artifact of rollout length.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="All-NaN slice encountered")
+        thr = np.nanpercentile(pool, pct, axis=0).astype(np.float32)
     return np.broadcast_to(thr, (n_years, nlat, nlon)).astype(np.float32)
 
 
@@ -187,6 +192,18 @@ def compute_daywise_thresholds(all_data: np.ndarray,
 
 # Back-compat alias: behavior is now full-climatology (no LOYO) despite the name.
 compute_daywise_thresholds_loo = compute_daywise_thresholds
+
+
+def exceedance_frequency(samples: np.ndarray, thresh: np.ndarray,
+                         axes: tuple[int, ...] | int) -> np.ndarray:
+    """Fraction of finite samples exceeding a finite threshold."""
+    valid = np.isfinite(samples) & np.isfinite(thresh)
+    hits = (samples > thresh) & valid
+    denom = valid.sum(axis=axes)
+    num = hits.sum(axis=axes)
+    out = np.full(denom.shape, np.nan, dtype=np.float32)
+    np.divide(num, denom, out=out, where=denom > 0)
+    return out
 
 
 # ── correlation maps ──────────────────────────────────────────────────────
@@ -247,6 +264,26 @@ def load_land_mask(lat: np.ndarray, lon_360: np.ndarray) -> np.ndarray | None:
     return lf2.values > 0.5
 
 
+def domain_scores_label(title: str, field: np.ndarray, lat: np.ndarray,
+                        land_mask: np.ndarray | None, fmt: str = "{:.3f}") -> str:
+    """Single-line corner-annotation string: the cos-lat-weighted score over the
+    whole domain, with land-only and ocean-only sub-domain values appended in a
+    parenthetical, e.g.:
+
+        mean τ = 0.482  (land 0.515, sea 0.447)
+
+    Keeps the original compact one-line legend look. Land/ocean means honour any
+    NaNs already in `field` (e.g. HHE occurrence masking), since cos_lat_mean
+    ignores non-finite cells.
+    """
+    a = cos_lat_mean(field, lat)
+    if land_mask is None:
+        return f"{title} = {fmt.format(a)}"
+    lnd = cos_lat_mean(field, lat, mask=land_mask)
+    sea = cos_lat_mean(field, lat, mask=~land_mask)
+    return f"{title} = {fmt.format(a)}  (land {fmt.format(lnd)}, sea {fmt.format(sea)})"
+
+
 # ── plotting ───────────────────────────────────────────────────────────────
 
 def _roll_to_180(field, lon):
@@ -276,8 +313,7 @@ def plot_global(field: np.ndarray, pval: np.ndarray,
 
     LON2D, LAT2D = np.meshgrid(lon_r, lat)
     if signed:
-        vmax = float(np.nanpercentile(np.abs(plot_field), 99)) if np.isfinite(plot_field).any() else 0.6
-        vmax = max(vmax, 1e-6)
+        vmax = 1.0
         cmap, vmin = "RdBu_r", -vmax
     else:
         cmap, vmin, vmax = _SKILL_CMAP, 0.0, 0.6
@@ -414,16 +450,16 @@ def main():
     ace2_thresh = compute_daywise_thresholds(ace2_all)
     print("  ACE2 done.", flush=True)
 
-    # Vectorised seasonal frequency — year-specific LOO threshold
+    # Vectorised seasonal frequency against fixed full-climatology thresholds.
     print("\nComputing seasonal frequencies ...", flush=True)
     ace2_freqs_list, era5_freqs_list = [], []
     for i, yr in enumerate(YEARS):
         # ace2_all[i]: (25, 92, nlat, nlon),  ace2_thresh[i]: (92, nlat, nlon)
-        af = (ace2_all[i] > ace2_thresh[i][np.newaxis]).astype(np.float32).mean(axis=(0, 1))
-        ef = (era5_all[i] > era5_thresh[i]).astype(np.float32).mean(axis=0)
+        af = exceedance_frequency(ace2_all[i], ace2_thresh[i][np.newaxis], axes=(0, 1))
+        ef = exceedance_frequency(era5_all[i], era5_thresh[i], axes=0)
         ace2_freqs_list.append(af)
         era5_freqs_list.append(ef)
-        print(f"  {yr}: ACE2={af.mean():.3f}  ERA5={ef.mean():.3f}", flush=True)
+        print(f"  {yr}: ACE2={np.nanmean(af):.3f}  ERA5={np.nanmean(ef):.3f}", flush=True)
     ace2_freqs = np.stack(ace2_freqs_list, axis=0)   # (n_years, nlat, nlon)
     era5_freqs = np.stack(era5_freqs_list, axis=0)
 
@@ -445,10 +481,10 @@ def main():
     # Save seasonal frequency arrays for downstream SST / cluster scripts
     da_af = xr.DataArray(ace2_freqs, dims=["year", "lat", "lon"],
                          coords={"year": YEARS, "lat": lat, "lon": lon},
-                         attrs={"long_name": "ACE2 JJA HHE seasonal frequency (LOO ±7d)"})
+                         attrs={"long_name": "ACE2 JJA raw TMP2m heat-extreme seasonal frequency (no-LOYO +/-7d)"})
     da_ef = xr.DataArray(era5_freqs, dims=["year", "lat", "lon"],
                          coords={"year": YEARS, "lat": lat, "lon": lon},
-                         attrs={"long_name": "ERA5 JJA HHE seasonal frequency (LOO ±7d)"})
+                         attrs={"long_name": "ERA5 JJA raw TMP2m heat-extreme seasonal frequency (no-LOYO +/-7d)"})
     xr.Dataset({"ace2_freq": da_af, "era5_freq": da_ef}).to_netcdf(
         out_dir / "jja_seasonal_freqs.nc")
     print(f"wrote: {out_dir / 'jja_seasonal_freqs.nc'}", flush=True)

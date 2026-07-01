@@ -187,7 +187,7 @@ def plot_box_on_skill(tau, lat, lon, box, out_png):
 
     fig, ax = plt.subplots(figsize=(10, 7))
     ax.set_facecolor("white")
-    mesh = ax.pcolormesh(LON, LAT, tau_s, cmap="RdBu_r", vmin=-0.8, vmax=0.8,
+    mesh = ax.pcolormesh(LON, LAT, tau_s, cmap="RdBu_r", vmin=-1.0, vmax=1.0,
                          shading="nearest", zorder=1)
     ax.set_xlim(-128, -65); ax.set_ylim(22, 50); ax.set_aspect(1.0)
     _draw_coast_and_borders(ax, (-128, -65), (22, 50))
@@ -210,13 +210,20 @@ def plot_box_on_skill(tau, lat, lon, box, out_png):
 def plot_lag_panels(corr_by_lag, pval_by_lag, lat, lon, index_name, out_png):
     """One row of SST-correlation maps, one panel per lag (predictability lead)."""
     lags = list(LAGS.keys())
-    fig, axes = plt.subplots(1, len(lags), figsize=(5.2 * len(lags), 5))
+    fig = plt.figure(figsize=(5.2 * len(lags) + 0.7, 5.0))
+    gs = fig.add_gridspec(
+        1, len(lags) + 1,
+        width_ratios=[1.0] * len(lags) + [0.045],
+        left=0.035, right=0.965, bottom=0.13, top=0.84, wspace=0.18,
+    )
+    axes = [fig.add_subplot(gs[0, i]) for i in range(len(lags))]
+    cax = fig.add_subplot(gs[0, -1])
     for ax, lag in zip(axes, lags):
         mesh = _render_corr_ax(ax, corr_by_lag[lag], pval_by_lag[lag], lat, lon,
                                lag.replace("_", "  "))
-    fig.colorbar(mesh, ax=axes, shrink=0.8, orientation="vertical", label="Pearson r")
+    fig.colorbar(mesh, cax=cax, orientation="vertical", label="Pearson r")
     fig.suptitle(f"Pre-JJA SST  ×  {index_name} JJA HHE index  |  predictability lead time"
-                 f"  |  stipple p<0.05", fontsize=12, y=1.02)
+                 f"  |  stipple p<0.05", fontsize=12, y=0.92)
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out_png}", flush=True)

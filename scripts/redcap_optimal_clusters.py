@@ -69,13 +69,19 @@ def _standardize_rows(X):
     return (X - mu) / sd
 
 
-def cluster_similarity(features, labels, weights, k):
+def cluster_similarity(features, labels, weights, k, between_pctl=90.0):
     """Within- and between-cluster pattern correlation for one K.
 
     features : (n_valid, T) grid-point time-series patterns
     labels   : (n_valid,) cluster id in [0, k)
     weights  : (n_valid,) cos-lat area weights
-    Returns (within_mean, within_std, between_mean, between_std).
+    between_pctl : percentile of the cluster-pair correlation distribution used
+                   for the "between" value (the reference uses the 90th
+                   percentile — the most-similar/redundant cluster pair — so the
+                   red line rises to meet the within-cluster blue line and they
+                   intersect; the mean never would, since clustering keeps
+                   within >= between).
+    Returns (within_mean, within_std, between_value, between_std).
     Per-cluster within values are weighted by cluster area; the bands are the
     weighted std across clusters (within) and the std over centroid pairs
     (between), mirroring the shaded envelopes in the reference figure.
@@ -117,12 +123,13 @@ def cluster_similarity(features, labels, weights, k):
         corr = (C @ C.T) / T
         iu = np.triu_indices(C.shape[0], k=1)
         pair = corr[iu]
-        between_mean = float(pair.mean())
+        # 90th-percentile cluster-pair correlation = the most-redundant pair
+        between_value = float(np.percentile(pair, between_pctl))
         between_std = float(pair.std())
     else:
-        between_mean = between_std = np.nan
+        between_value = between_std = np.nan
 
-    return within_mean, within_std, between_mean, between_std
+    return within_mean, within_std, between_value, between_std
 
 
 def find_knee(k_vals, y):
@@ -138,6 +145,78 @@ def find_knee(k_vals, y):
     xn = (x - x.min()) / (x.max() - x.min())
     yn = (y - y.min()) / (y.max() - y.min())
     return int(kk[np.argmax(yn - xn)])
+
+
+def select_optimal_intersection(k_vals, within_m, within_s, between_m, between_s):
+    """Optimal cluster count = where the between line (red, 90th-pct cluster-pair
+    correlation) rises to MEET the within line (blue), i.e. the reference
+    figure's red∩blue intersection.
+
+    Returns (k_opt, band_lo, band_hi, k_cross):
+      k_cross  : first K with between >= within (the crossover; None if never)
+      k_opt    : the optimal K (k_cross, or the closest approach if no crossover)
+      band_lo/hi: the grey 'intersection' band = contiguous K where the within
+                  and between spread envelopes overlap.
+    """
+    k  = np.asarray(k_vals)
+    wm = np.asarray(within_m, float); ws = np.nan_to_num(np.asarray(within_s, float))
+    bm = np.asarray(between_m, float); bs = np.nan_to_num(np.asarray(between_s, float))
+
+    diff = bm - wm
+    cross = np.where(np.isfinite(diff) & (diff >= 0.0))[0]
+    if cross.size:
+        k_cross = int(k[cross[0]])
+        k_opt = k_cross
+        # band = contiguous K where the spread envelopes overlap, anchored on
+        # the crossover (the genuine 'intersection' region)
+        overlap = (np.isfinite(wm) & np.isfinite(bm)
+                   & ((wm - ws) <= (bm + bs)) & ((bm - bs) <= (wm + ws)))
+        idx = np.where(overlap)[0]
+        if idx.size:
+            band_lo, band_hi = int(k[idx[0]]), int(k[idx[-1]])
+        else:
+            band_lo = band_hi = k_opt
+    else:
+        # within stays above between throughout -> no real intersection;
+        # report the closest approach and DON'T draw a spurious wide band.
+        k_cross = None
+        k_opt = int(k[np.nanargmax(diff)])
+        band_lo = band_hi = k_opt
+    return k_opt, band_lo, band_hi, k_cross
+
+
+def plot_similarity(k_vals, within_m, within_s, between_m, between_s,
+                    k_opt, band_lo, band_hi, xlabel, out_png, opt_word="optimal",
+                    between_label="Between clusters (90th pct of pair corr)"):
+    """Render the reference '(A) Similarity' panel: within (blue) and between
+    (red) pattern-correlation curves with spread bands, the grey intersection
+    band, and the optimal cluster count marked."""
+    k_vals = list(k_vals)
+    wm = np.asarray(within_m, float); ws = np.asarray(within_s, float)
+    bm = np.asarray(between_m, float); bs = np.asarray(between_s, float)
+    fig, ax = plt.subplots(figsize=(9, 4.2))
+    BLUE, RED = "#1f5fd0", "#e8202a"
+
+    if band_hi >= band_lo:
+        ax.axvspan(band_lo - 0.5, band_hi + 0.5, color="0.85", zorder=0,
+                   label="intersection (optimal)")
+    ax.fill_between(k_vals, wm - ws, wm + ws, color=BLUE, alpha=0.18, lw=0)
+    ax.fill_between(k_vals, bm - bs, bm + bs, color=RED, alpha=0.18, lw=0)
+    ax.plot(k_vals, wm, "-", color=BLUE, lw=2.5, label="Within clusters")
+    ax.plot(k_vals, bm, "-", color=RED, lw=2.5, label=between_label)
+    ax.axvline(k_opt, color="0.35", lw=1.0, ls="--", zorder=1)
+    ymin = float(np.nanmin([np.nanmin(wm), np.nanmin(bm)]))
+    ax.annotate(f"{opt_word} = {k_opt}", xy=(k_opt, ymin),
+                xytext=(k_opt + 0.2, ymin), fontsize=9, color="0.2")
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel("Pattern correlation", fontsize=12)
+    ax.set_xticks(k_vals)
+    ax.set_title("(A) Similarity", fontsize=14, weight="bold", loc="left")
+    ax.legend(fontsize=10, loc="lower right", frameon=False)
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
 
 
 # ── main ────────────────────────────────────────────────────────────────────────
@@ -215,56 +294,22 @@ def main():
     within_m = np.array(within_m); within_s = np.array(within_s)
     between_m = np.array(between_m); between_s = np.array(between_s)
 
-    # crossover: first K where between >= within
-    cross_idx = np.where(between_m >= within_m)[0]
-    k_cross = int(k_vals[cross_idx[0]]) if cross_idx.size else None
+    # optimal = red∩blue intersection (between rises to meet within)
+    k_opt, band_lo, band_hi, k_cross = select_optimal_intersection(
+        k_vals, within_m, within_s, between_m, between_s)
+    print(f"\nCrossover K (between p90 >= within): {k_cross}", flush=True)
+    print(f"Optimal REDCAP K (red∩blue intersection): {k_opt}  "
+          f"band {band_lo}-{band_hi}", flush=True)
 
-    # knee of within curve, constrained at/below the crossover
-    if k_cross is not None:
-        upto = [i for i, k in enumerate(k_vals) if k <= k_cross]
-    else:
-        upto = list(range(len(k_vals)))
-    k_opt = find_knee([k_vals[i] for i in upto], within_m[upto])
-
-    print(f"\nCrossover K (between >= within): {k_cross}", flush=True)
-    print(f"Optimal REDCAP K (within-curve knee): {k_opt}", flush=True)
-
-    # ── plot (reference "(A) Similarity" style) ──────────────────────────────────
-    fig, ax = plt.subplots(figsize=(9, 4.2))
-    BLUE, RED = "#1f5fd0", "#e8202a"
-
-    # optimal band: knee → crossover (or a ±1 window if no crossover)
-    band_lo = k_opt
-    band_hi = k_cross if k_cross is not None else k_opt + 1
-    if band_hi <= band_lo:
-        band_hi = band_lo + 1
-    ax.axvspan(band_lo - 0.5, band_hi - 0.5, color="0.85", zorder=0)
-
-    ax.fill_between(k_vals, within_m - within_s, within_m + within_s,
-                    color=BLUE, alpha=0.18, lw=0)
-    ax.fill_between(k_vals, between_m - between_s, between_m + between_s,
-                    color=RED, alpha=0.18, lw=0)
-    ax.plot(k_vals, within_m, "-", color=BLUE, lw=2.5, label="Within clusters")
-    ax.plot(k_vals, between_m, "-", color=RED, lw=2.5, label="Between clusters")
-
-    ax.axvline(k_opt, color="0.35", lw=1.0, ls="--", zorder=1)
-    ax.annotate(f"optimal K = {k_opt}", xy=(k_opt, ax.get_ylim()[0]),
-                xytext=(k_opt + 0.2, within_m.min()), fontsize=9, color="0.2")
-
-    ax.set_xlabel("Number of clusters (REDCAP, Nx1)", fontsize=12)
-    ax.set_ylabel("Pattern correlation", fontsize=12)
-    ax.set_xticks(k_vals)
-    ax.set_title("(A) Similarity", fontsize=14, weight="bold", loc="left")
-    ax.legend(fontsize=11, loc="lower right", frameon=False)
-    ax.grid(True, alpha=0.25)
-    fig.tight_layout()
     out_png = out_dir / "optimal_clusters_redcap.png"
-    fig.savefig(out_png, dpi=150)
-    plt.close(fig)
+    plot_similarity(k_vals, within_m, within_s, between_m, between_s,
+                    k_opt, band_lo, band_hi,
+                    "Number of clusters (REDCAP, N×1)", out_png, opt_word="optimal K")
     print(f"wrote {out_png}", flush=True)
 
     summary = {
-        "method": "REDCAP (Ward, queen-connectivity) within/between pattern correlation",
+        "method": "REDCAP (Ward, queen-connectivity); within = member↔centroid corr, "
+                  "between = 90th-pct cluster-pair corr",
         "domain": "conus" if conus else "global",
         "subdomain": args.domain,
         "n_valid": n_valid,
@@ -276,7 +321,8 @@ def main():
         "between_std": between_s.tolist(),
         "k_crossover": k_cross,
         "optimal_k": k_opt,
-        "selection_rule": "knee of within-cluster curve, bounded at/below crossover",
+        "optimal_band": [band_lo, band_hi],
+        "selection_rule": "red∩blue intersection (between 90th-pct rises to meet within)",
     }
     out_json = out_dir / "optimal_clusters_redcap.json"
     out_json.write_text(json.dumps(summary, indent=2))

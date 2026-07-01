@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Optimal SOM cluster count via within/between pattern-correlation similarity.
+"""Optimal SOM size via Johnson (2013) statistical distinguishability.
 
-The SOM counterpart of redcap_optimal_clusters.py — and the direct analogue of
-the reference "(A) Similarity" panel, which sweeps a 1-D SOM of map size N×1.
+Faithful implementation of the optimal-map-size criterion of Johnson (2013),
+"How many ENSO flavors can we distinguish?" (J. Climate,
+doi:10.1175/JCLI-D-12-00649.1, Section 2b).
 
-For each N (number of SOM nodes, N×1 map) we train a SOM on the standardized
-37-year HHE-frequency time series at each CONUS grid cell, assign each cell to
-its best-matching unit, then compute:
+Like Johnson, we cluster *fields* — here the 37 yearly JJA HHE-frequency fields
+(samples = years), NOT grid cells. An N×1 SOM groups the 37 years into recurring
+HHE-frequency spatial patterns ("flavours" of HHE summers). For each map size N:
 
-  within(N)  = cos-lat-weighted mean over nodes of the mean correlation between
-               each member cell's series and its node centroid (compactness).
-  between(N) = mean correlation between distinct node centroids (redundancy).
+  * assign each year to its best-matching node;
+  * for every pair of node composites (i, j) run a per-grid-cell two-sample
+    (Welch) t-test for difference of means — members are the (independent) YEARS
+    assigned to each node — yielding one p-value per cell;
+  * apply an FDR field-significance test (Benjamini-Hochberg / Wilks 2006) at
+    q=0.05: the pair is DISTINGUISHABLE if >=1 local test survives FDR;
+  * count the indistinguishable node pairs.
 
-SOM training is stochastic, so each N is trained with several random seeds and
-the curves are averaged (band = mean cluster/pair spread, as in REDCAP). The
-optimal N is the **knee of the within-cluster curve**, bounded at/below the
-crossover where between rises to meet within.
+  N* = the largest N with ZERO indistinguishable node pairs (Johnson's K*).
+
+This replaces the earlier within/between pattern-correlation *intersection*
+method (Frontiers 2022), which was run on a transposed cell-regionalization and
+is not Johnson's method. See johnson_distinguishability.py.
 
 Outputs → outputs/lag_may/cluster_analysis_sliding7d_conus[/_<domain>]/
             optimal_clusters_som.png
@@ -40,20 +46,26 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from cluster_skill_analysis_sliding7d import (  # noqa: E402
-    SLIDING_DIR, CONUS_LAT_SLICE, CONUS_LON_SLICE,
-    build_features, _apply_domain_mask,
+    SLIDING_DIR, CONUS_LAT_SLICE, CONUS_LON_SLICE, _apply_domain_mask,
 )
-from redcap_optimal_clusters import cluster_similarity, find_knee  # noqa: E402
+from johnson_distinguishability import (  # noqa: E402
+    count_indistinguishable_pairs, select_max_distinguishable,
+    plot_distinguishability,
+)
 
 
-def som_labels(features, n_nodes, seed):
-    """Train an N×1 SOM and return the best-matching-unit label per sample."""
-    n_features = features.shape[1]
+def som_year_labels(fields_z, n_nodes, seed):
+    """Train an N×1 SOM on the per-cell-standardized yearly fields and return the
+    best-matching-unit (node) label for each YEAR.
+
+    fields_z : (n_years, n_cells) standardized HHE-frequency anomaly fields.
+    """
+    n_features = fields_z.shape[1]
     som = MiniSom(n_nodes, 1, n_features,
                   sigma=max(1.0, n_nodes / 4.0), learning_rate=0.5,
                   random_seed=seed)
-    som.train_random(features, num_iteration=2000, verbose=False)
-    return np.array([som.winner(x)[0] for x in features])
+    som.train_random(fields_z, num_iteration=2000, verbose=False)
+    return np.array([som.winner(x)[0] for x in fields_z])
 
 
 def main():
@@ -62,10 +74,17 @@ def main():
     p.add_argument("--global", dest="globaldomain", action="store_true",
                    help="Full global domain instead of CONUS (default CONUS)")
     p.add_argument("--domain", choices=["all", "land", "ocean"], default="all")
+    p.add_argument("--source", choices=["ace2", "era5"], default="ace2",
+                   help="Which yearly HHE-frequency fields to cluster")
     p.add_argument("--kmin", type=int, default=2)
-    p.add_argument("--kmax", type=int, default=20)
+    p.add_argument("--kmax", type=int, default=12,
+                   help="Max nodes (limited by ~37 yearly samples)")
     p.add_argument("--seeds", type=int, default=5,
-                   help="SOM trainings averaged per N (stochastic init)")
+                   help="SOM trainings per N (stochastic init)")
+    p.add_argument("--q", type=float, default=0.05,
+                   help="FDR field-significance level (Johnson uses 0.05)")
+    p.add_argument("--out-stem", default="optimal_clusters_som",
+                   help="Output filename stem for the Johnson plot/json")
     args = p.parse_args()
     conus = not args.globaldomain
 
@@ -81,103 +100,94 @@ def main():
     ds = xr.open_dataset(freq_nc)
     lat = ds["lat"].values
     lon = ds["lon"].values
-    pred = ds["ace2_freq"].values.astype(np.float32)
-    obs = ds["era5_freq"].values.astype(np.float32)
+    var = "ace2_freq" if args.source == "ace2" else "era5_freq"
+    data = ds[var].values.astype(np.float32)
     ds.close()
 
     if conus:
-        pred = pred[:, CONUS_LAT_SLICE, CONUS_LON_SLICE]
-        obs = obs[:, CONUS_LAT_SLICE, CONUS_LON_SLICE]
+        data = data[:, CONUS_LAT_SLICE, CONUS_LON_SLICE]
         lat = lat[CONUS_LAT_SLICE]
         lon = lon[CONUS_LON_SLICE]
         print(f"CONUS box: lat {lat[0]:.1f}..{lat[-1]:.1f}  lon {lon[0]:.1f}..{lon[-1]:.1f}", flush=True)
 
     if args.domain != "all":
-        pred, obs = _apply_domain_mask(args.domain, lat, lon, pred, obs)
+        data, _ = _apply_domain_mask(args.domain, lat, lon, data, data.copy())
         print(f"Domain: {args.domain}-only", flush=True)
 
-    _, features_temporal, valid_mask = build_features(pred, lat, lon)
-    n_valid = int(valid_mask.sum())
-    print(f"features_temporal: {features_temporal.shape}  n_valid={n_valid}", flush=True)
-
-    lat_g = np.broadcast_to(np.cos(np.deg2rad(lat))[:, None], valid_mask.shape)
-    weights = lat_g[valid_mask].astype(np.float64)
+    # ── Johnson field-clustering: samples = years, features = grid cells ──────
+    valid = np.all(np.isfinite(data), axis=0)
+    fields = data[:, valid]                      # (n_years, n_cells)
+    n_years, n_cells = fields.shape
+    # standardize each cell across years -> SOM groups by anomaly pattern, not by
+    # the climatological hotspot magnitude (Johnson clusters anomaly fields). The
+    # per-cell scaling leaves the per-cell two-sample t-statistic unchanged, so
+    # the distinguishability test is identical whether run on raw or standardized.
+    mu = fields.mean(0, keepdims=True)
+    sd = fields.std(0, keepdims=True)
+    sd = np.where(sd < 1e-12, 1.0, sd)
+    fields_z = (fields - mu) / sd
+    print(f"field-clustering: samples(years)={n_years}  features(cells)={n_cells}  "
+          f"source={args.source}", flush=True)
 
     k_vals = list(range(args.kmin, args.kmax + 1))
-    within_m, within_s, between_m, between_s = [], [], [], []
-    print(f"\n  N   within   between   (avg of {args.seeds} SOM seeds)", flush=True)
+    med_counts, lo_counts, hi_counts = [], [], []
+    print(f"\n  N   #indist (median of {args.seeds} seeds)   [min..max]   "
+          f"med #non-empty nodes", flush=True)
     for k in k_vals:
-        wm_s, ws_s, bm_s, bs_s = [], [], [], []
+        per_seed, nodes_seed = [], []
         for seed in range(args.seeds):
-            labels = som_labels(features_temporal, k, seed=42 + seed)
-            k_eff = int(labels.max()) + 1
-            wm, ws, bm, bs = cluster_similarity(features_temporal, labels, weights, k_eff)
-            wm_s.append(wm); ws_s.append(ws); bm_s.append(bm); bs_s.append(bs)
-        within_m.append(np.nanmean(wm_s)); within_s.append(np.nanmean(ws_s))
-        between_m.append(np.nanmean(bm_s)); between_s.append(np.nanmean(bs_s))
-        print(f"  {k:2d}   {within_m[-1]:.3f}    "
-              f"{between_m[-1] if np.isfinite(between_m[-1]) else float('nan'):.3f}", flush=True)
+            labels = som_year_labels(fields_z, k, seed=42 + seed)
+            n_ind, n_pairs, n_unt = count_indistinguishable_pairs(
+                fields_z, labels, q=args.q)
+            per_seed.append(n_ind)
+            nodes_seed.append(len(np.unique(labels)))
+        per_seed = np.asarray(per_seed, float)
+        med_counts.append(float(np.median(per_seed)))
+        lo_counts.append(float(per_seed.min()))
+        hi_counts.append(float(per_seed.max()))
+        print(f"  {k:2d}   {med_counts[-1]:5.1f}                      "
+              f"[{lo_counts[-1]:.0f}..{hi_counts[-1]:.0f}]    "
+              f"{int(np.median(nodes_seed))}", flush=True)
 
-    within_m = np.array(within_m); within_s = np.array(within_s)
-    between_m = np.array(between_m); between_s = np.array(between_s)
+    kstar = select_max_distinguishable(k_vals, med_counts)
+    print(f"\nOptimal SOM N* (largest N with zero indistinguishable pairs): {kstar}",
+          flush=True)
 
-    cross_idx = np.where(between_m >= within_m)[0]
-    k_cross = int(k_vals[cross_idx[0]]) if cross_idx.size else None
-    upto = [i for i, k in enumerate(k_vals) if (k_cross is None or k <= k_cross)]
-    k_opt = find_knee([k_vals[i] for i in upto], within_m[upto])
-
-    print(f"\nCrossover N (between >= within): {k_cross}", flush=True)
-    print(f"Optimal SOM N (within-curve knee): {k_opt}", flush=True)
-
-    # ── plot (reference "(A) Similarity" style) ──────────────────────────────────
-    fig, ax = plt.subplots(figsize=(9, 4.2))
-    BLUE, RED = "#1f5fd0", "#e8202a"
-
-    band_lo, band_hi = k_opt, (k_cross if k_cross is not None else k_opt + 1)
-    if band_hi <= band_lo:
-        band_hi = band_lo + 1
-    ax.axvspan(band_lo - 0.5, band_hi - 0.5, color="0.85", zorder=0)
-
-    ax.fill_between(k_vals, within_m - within_s, within_m + within_s,
-                    color=BLUE, alpha=0.18, lw=0)
-    ax.fill_between(k_vals, between_m - between_s, between_m + between_s,
-                    color=RED, alpha=0.18, lw=0)
-    ax.plot(k_vals, within_m, "-", color=BLUE, lw=2.5, label="Within clusters")
-    ax.plot(k_vals, between_m, "-", color=RED, lw=2.5, label="Between clusters")
-    ax.axvline(k_opt, color="0.35", lw=1.0, ls="--", zorder=1)
-    ax.annotate(f"optimal N = {k_opt}", xy=(k_opt, within_m.min()),
-                xytext=(k_opt + 0.2, within_m.min()), fontsize=9, color="0.2")
-
-    ax.set_xlabel("SOM map size (N×1)", fontsize=12)
-    ax.set_ylabel("Pattern correlation", fontsize=12)
-    ax.set_xticks(k_vals)
-    ax.set_title("(A) Similarity", fontsize=14, weight="bold", loc="left")
-    ax.legend(fontsize=11, loc="lower right", frameon=False)
-    ax.grid(True, alpha=0.25)
-    fig.tight_layout()
-    out_png = out_dir / "optimal_clusters_som.png"
-    fig.savefig(out_png, dpi=150)
-    plt.close(fig)
+    out_png = out_dir / f"{args.out_stem}.png"
+    plot_distinguishability(
+        k_vals, med_counts, kstar, "SOM map size (N×1)", out_png,
+        spread=(lo_counts, hi_counts),
+        title="SOM optimal size — Johnson (2013) distinguishability "
+              "(t-test + FDR, q=%.2f)" % args.q)
     print(f"wrote {out_png}", flush=True)
 
     summary = {
-        "method": "SOM (N×1) within/between pattern correlation",
+        "method": "Johnson (2013) maximum number of statistically distinguishable "
+                  "clusters: cluster yearly HHE fields; pairwise per-cell Welch "
+                  "t-test + FDR field significance; N* = largest N with zero "
+                  "indistinguishable node pairs",
+        "reference": "Johnson 2013, J. Climate, doi:10.1175/JCLI-D-12-00649.1, Sec 2b",
+        "clustering": "SOM (N×1, MiniSom) on yearly HHE-frequency fields",
+        "samples": f"{n_years} JJA years",
+        "field_dim": int(n_cells),
+        "field_meaning": "grid cells (the spatial field the t-test runs over)",
+        "member_meaning": "years assigned to each node (independent samples)",
+        "source": args.source,
+        "fdr_q": args.q,
         "domain": "conus" if conus else "global",
         "subdomain": args.domain,
-        "n_valid": n_valid,
         "seeds": args.seeds,
         "k_range": [args.kmin, args.kmax],
         "k_values": k_vals,
-        "within_mean": within_m.tolist(),
-        "within_std": within_s.tolist(),
-        "between_mean": between_m.tolist(),
-        "between_std": between_s.tolist(),
-        "k_crossover": k_cross,
-        "optimal_k": k_opt,
-        "selection_rule": "knee of within-cluster curve, bounded at/below crossover",
+        "indistinguishable_median": med_counts,
+        "indistinguishable_min": lo_counts,
+        "indistinguishable_max": hi_counts,
+        "optimal_k": kstar,
+        "selection_rule": "largest N with zero statistically indistinguishable node pairs",
     }
-    (out_dir / "optimal_clusters_som.json").write_text(json.dumps(summary, indent=2))
-    print(f"wrote {out_dir / 'optimal_clusters_som.json'}", flush=True)
+    out_json = out_dir / f"{args.out_stem}.json"
+    out_json.write_text(json.dumps(summary, indent=2))
+    print(f"wrote {out_json}", flush=True)
 
 
 if __name__ == "__main__":

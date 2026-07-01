@@ -401,19 +401,18 @@ def _add_skill_stats(ax, field: np.ndarray, lat: np.ndarray, lon: np.ndarray,
 
 def plot_tau_map(tau: np.ndarray, lat: np.ndarray, lon: np.ndarray,
                  title: str, out_path: Path, land_mask: np.ndarray | None = None):
-    abs_tau = np.abs(tau)
     fig, ax = plt.subplots(figsize=(14, 6), subplot_kw=dict(projection=_PLATE))
-    mesh = ax.pcolormesh(lon, lat, abs_tau,
-                         shading="auto", cmap=_HEAT_CMAP,
-                         vmin=0.0, vmax=0.4,
+    mesh = ax.pcolormesh(lon, lat, tau,
+                         shading="auto", cmap="RdBu_r",
+                         vmin=-1.0, vmax=1.0,
                          transform=_PLATE)
     ax.set_global()
     ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=3)
     ax.add_feature(cfeature.BORDERS,   linewidth=0.3, zorder=3)
     ax.gridlines(draw_labels=True, linewidth=0.3, color="gray", alpha=0.5)
-    fig.colorbar(mesh, ax=ax, shrink=0.7, label="|Kendall τ|")
+    fig.colorbar(mesh, ax=ax, shrink=0.7, label="Kendall τ")
     ax.set_title(title, fontsize=11)
-    _add_skill_stats(ax, abs_tau, lat, lon, "τ", land_mask)
+    _add_skill_stats(ax, tau, lat, lon, "τ", land_mask)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
     plt.close(fig)
@@ -545,7 +544,7 @@ def main():
         # Per-lead tau and BSS maps
         plot_tau_map(
             tau_lead, lat, lon,
-            f"|Kendall τ| — ACE2 JJA {label} | {YEARS[0]}–{YEARS[-1]}",
+            f"Kendall τ — ACE2 JJA {label} | {YEARS[0]}–{YEARS[-1]}",
             FIGURES_DIR / f"tau_map_{label.lower()}.png",
             land_mask=land_mask,
         )
@@ -584,7 +583,7 @@ def main():
 
     plot_tau_map(
         tau_jja, lat, lon,
-        f"|Kendall τ| — ACE2 JJA pooled (Jun+Jul+Aug) | {YEARS[0]}–{YEARS[-1]}",
+        f"Kendall τ — ACE2 JJA pooled (Jun+Jul+Aug) | {YEARS[0]}–{YEARS[-1]}",
         FIGURES_DIR / "tau_map_jja.png",
         land_mask=land_mask,
     )

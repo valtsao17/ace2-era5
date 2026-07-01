@@ -121,6 +121,7 @@ def main():
         "Raw heat extreme (JJA days > 90th-pct TMP2m), seasonal frequency",
         "% of JJA days above 90th percentile",
         OUT_DIR / "fig1_raw_extreme_freq_panels.png",
+        draw_box=True,
     )
 
     with xr.open_dataset(HHE_DIR / "jja_hi_freq_era5.nc") as d:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SST–HHE teleconnection using ±7-day LOO seasonal-frequency approach.
+"""SST–HHE teleconnection using ±7-day no-LOYO seasonal-frequency approach.
 
 Parallel to sst_teleconnection_jja.py but using seasonal frequency from
 seasonal_jja_skill.py instead of the per-date ±15-day LOO from postprocess_jja_lag.py.
@@ -433,7 +433,7 @@ def main():
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     yr_range = f"{YEARS[0]}–{YEARS[-1]}"
-    thresh_label = "±7-day sliding window thresholds"
+    thresh_label = "±7-day no-LOYO sliding window thresholds"
 
     plot_corr_panel(
         corr_era5, pval_era5, sst_lat, sst_lon,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cluster skill analysis using ±7-day LOO seasonal-frequency approach.
+"""Cluster skill analysis using ±7-day no-LOYO seasonal-frequency approach.
 
 Parallel to cluster_skill_analysis.py but uses the 37-year seasonal frequency
 arrays from seasonal_jja_skill.py instead of the 111-event per-date pred_prob
@@ -63,13 +63,13 @@ _TAU_CMAP = "RdBu_r"   # diverging blue-white-red, signed tau (negative=blue, po
 # METRIC selects how each grid-point / cluster pred–obs series pair is scored.
 # "tau"        → scipy Kendall τ (bounded, default; original behavior)
 # "modkendall" → modified-Kendall z, top-k weighted (Zheng & Lo 2006)
-from mod_kendall_metric import mk_z, DEFAULT_K as _MK_DEFAULT_K  # noqa: E402
+from mod_kendall_metric import mk_z, DEFAULT_K as _MK_DEFAULT_K, normalized_z_for_plot  # noqa: E402
 
 METRIC      = "tau"
 METRIC_K    = _MK_DEFAULT_K
 METRIC_SYM  = "τ"               # colorbar / short label
 METRIC_NAME = "Kendall τ"        # axis / legend label
-METRIC_FIXED_VLIM = 0.4          # symmetric scale for fixed-range τ panels
+METRIC_FIXED_VLIM = 1.0          # Kendall τ is plotted on its full [-1, 1] range
 
 
 def assoc_metric(pred_c, obs_c):
@@ -172,15 +172,28 @@ def plot_cluster_tau_map(tau_map, labels_2d, tau_cl, tau_domain, lat, lon, title
     diverging blue-white-red scale, the numeric (signed) τ labeled at the
     cluster centroid, and the domain-mean τ called out in a corner annotation.
 
-    vmax auto-scales to the data when not given: cluster-aggregated τ runs
-    much higher than grid-point τ (e.g. ~0.4 at the pixel level vs ~0.8 for
-    a 2-cluster split), so a fixed scale saturates and washes out low-k
-    cluster maps. vmin defaults to -vmax for a zero-centered diverging scale.
+    Kendall τ defaults to the full [-1, 1] range so it is visually comparable
+    to normalized modified-Kendall z panels. Modified-Kendall z is normalized
+    to [-1, 1] before plotting.
     """
     cmap = cmap if cmap is not None else _TAU_CMAP
+    plot_map = tau_map
+    plot_cl = tau_cl
+    plot_domain = tau_domain
+    cbar_label = METRIC_SYM
+    if METRIC == "modkendall":
+        scale = _metric_vlim(tau_map, tau_cl, fallback=1.0)
+        plot_map, _ = normalized_z_for_plot(tau_map, scale=scale)
+        plot_cl = np.clip(tau_cl / scale, -1.0, 1.0).astype(np.float32)
+        plot_domain = domain_mean_tau(plot_map, lat)
+        vmin, vmax = -1.0, 1.0
+        cbar_label = "normalized z"
     if vmax is None:
-        finite = tau_map[np.isfinite(tau_map)]
-        vmax = max(float(np.nanmax(np.abs(finite))) * 1.05, 0.05) if finite.size else 0.4
+        if METRIC == "modkendall":
+            finite = plot_map[np.isfinite(plot_map)]
+            vmax = max(float(np.nanmax(np.abs(finite))) * 1.05, 0.05) if finite.size else 1.0
+        else:
+            vmax = METRIC_FIXED_VLIM
     if vmin is None:
         vmin = -vmax
     if len(lat) < 170:
@@ -188,28 +201,28 @@ def plot_cluster_tau_map(tau_map, labels_2d, tau_cl, tau_domain, lat, lon, title
         e = [float(lon_plot[0]) - 0.5, float(lon_plot[-1]) + 0.5,
              float(lat[0]) - 0.5, float(lat[-1]) + 0.5]
         fig, ax = plt.subplots(figsize=(10, 7))
-        im = ax.imshow(tau_map, origin="lower", extent=e, aspect="equal",
+        im = ax.imshow(plot_map, origin="lower", extent=e, aspect="equal",
                        vmin=vmin, vmax=vmax, cmap=cmap, zorder=1,
                        interpolation="nearest")
         LON2D, LAT2D = np.meshgrid(lon_plot, lat)
-        _annotate_cluster_tau(ax, labels_2d, tau_cl, LON2D, LAT2D, label_fontsize)
+        _annotate_cluster_tau(ax, labels_2d, plot_cl, LON2D, LAT2D, label_fontsize)
         _plain_map_axes(ax, lon, lat, pad=0.0)
         ax.set_title(title, fontsize=9)
-        plt.colorbar(im, ax=ax, shrink=0.7, pad=0.02, label=METRIC_SYM)
+        plt.colorbar(im, ax=ax, shrink=0.7, pad=0.02, label=cbar_label)
     else:
-        data_r, lon_r = _roll_to_180(tau_map, lon)
+        data_r, lon_r = _roll_to_180(plot_map, lon)
         labels_r, _   = _roll_to_180(labels_2d.astype(float), lon)
         fig, ax = plt.subplots(figsize=(14, 6))
         ax.set_facecolor("#d0e8f0")
         LON2D, LAT2D = np.meshgrid(lon_r, lat)
         m = ax.pcolormesh(LON2D, LAT2D, data_r, shading="nearest",
                           cmap=cmap, vmin=vmin, vmax=vmax, zorder=1)
-        _annotate_cluster_tau(ax, labels_r, tau_cl, LON2D, LAT2D, label_fontsize)
+        _annotate_cluster_tau(ax, labels_r, plot_cl, LON2D, LAT2D, label_fontsize)
         ax.set_xlim(-180, 180); ax.set_ylim(-90, 90)
         ax.set_title(title, fontsize=9)
-        plt.colorbar(m, ax=ax, shrink=0.6, pad=0.02, label=METRIC_SYM)
+        plt.colorbar(m, ax=ax, shrink=0.6, pad=0.02, label=cbar_label)
 
-    ax.text(0.02, 0.02, f"Domain-mean {METRIC_SYM} = {tau_domain:.3f}",
+    ax.text(0.02, 0.02, f"Domain-mean {cbar_label} = {plot_domain:.3f}",
            transform=ax.transAxes, fontsize=10, weight="bold",
            ha="left", va="bottom", zorder=7,
            bbox=dict(boxstyle="round", facecolor="white", alpha=0.85, edgecolor="black"))
@@ -548,16 +561,30 @@ def plot_goldilocks(km_results, som_results, redcap_results, tau_gridpt, bss_gri
     som_k   = [r["k"] for r in som_results]
     rc_k    = [r["k"] for r in redcap_results]
     for ax, metric in zip(axes, ("tau_domain", "bss_domain")):
-        ax.plot(km_k,  [r[metric] for r in km_results],  "o-",  color="#1f77b4", label="K-means")
-        ax.plot(som_k, [r[metric] for r in som_results], "s--", color="#ff7f0e", label="SOM")
-        if redcap_results:
-            ax.plot(rc_k, [r[metric] for r in redcap_results], "^-", color="#2ca02c", label="REDCAP Ward")
+        km_vals = np.asarray([r[metric] for r in km_results], dtype=np.float32)
+        som_vals = np.asarray([r[metric] for r in som_results], dtype=np.float32)
+        rc_vals = np.asarray([r[metric] for r in redcap_results], dtype=np.float32) if redcap_results else None
         ref = tau_gridpt if metric == "tau_domain" else bss_gridpt
-        lbl = (f"Grid-point {METRIC_SYM}={ref:.3f}" if metric == "tau_domain"
+        ylabel_metric = METRIC_NAME if "tau" in metric else "BSS"
+        ref_label_metric = METRIC_SYM if metric == "tau_domain" else "BSS"
+        if metric == "tau_domain" and METRIC == "modkendall":
+            scale = _metric_vlim(km_vals, som_vals, rc_vals, np.asarray([ref]), fallback=1.0)
+            km_vals = np.clip(km_vals / scale, -1.0, 1.0)
+            som_vals = np.clip(som_vals / scale, -1.0, 1.0)
+            if rc_vals is not None:
+                rc_vals = np.clip(rc_vals / scale, -1.0, 1.0)
+            ref = float(np.clip(ref / scale, -1.0, 1.0))
+            ylabel_metric = "normalized mod-Kendall z"
+            ref_label_metric = "normalized z"
+        ax.plot(km_k, km_vals, "o-", color="#1f77b4", label="K-means")
+        ax.plot(som_k, som_vals, "s--", color="#ff7f0e", label="SOM")
+        if redcap_results:
+            ax.plot(rc_k, rc_vals, "^-", color="#2ca02c", label="REDCAP Ward")
+        lbl = (f"Grid-point {ref_label_metric}={ref:.3f}" if metric == "tau_domain"
                else f"Grid-point BSS={ref:.3f}")
         ax.axhline(ref, color="0.4", linewidth=1.2, linestyle=":", label=lbl)
         ax.set_xscale("log")
-        ax.set_ylabel("Domain-mean " + (METRIC_NAME if "tau" in metric else "BSS"), fontsize=10)
+        ax.set_ylabel("Domain-mean " + ylabel_metric, fontsize=10)
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
     axes[1].set_xlabel("Number of clusters  (log scale)", fontsize=10)
@@ -572,15 +599,23 @@ def plot_goldilocks(km_results, som_results, redcap_results, tau_gridpt, bss_gri
 
 def plot_tau_vs_size(tau_cl, sizes, title, out):
     ok = (sizes > 0) & np.isfinite(tau_cl)
-    vlim = _metric_vlim(tau_cl[ok], fallback=0.5) if METRIC == "modkendall" else 0.5
+    plot_vals = tau_cl.copy()
+    cbar_label = METRIC_SYM
+    if METRIC == "modkendall":
+        scale = _metric_vlim(tau_cl[ok], fallback=1.0)
+        plot_vals = np.clip(tau_cl / scale, -1.0, 1.0).astype(np.float32)
+        vlim = 1.0
+        cbar_label = "normalized z"
+    else:
+        vlim = METRIC_FIXED_VLIM
     fig, ax = plt.subplots(figsize=(7, 5))
-    sc = ax.scatter(sizes[ok], tau_cl[ok], c=tau_cl[ok], cmap=_TAU_CMAP,
+    sc = ax.scatter(sizes[ok], plot_vals[ok], c=plot_vals[ok], cmap=_TAU_CMAP,
                     alpha=0.6, s=20, vmin=-vlim, vmax=vlim)
     ax.axhline(0, color="0.5", linewidth=0.8, linestyle="--")
     ax.set_xlabel("Cluster size (n valid grid points)")
-    ax.set_ylabel(f"Cluster {METRIC_NAME}")
+    ax.set_ylabel(f"Cluster {cbar_label if METRIC == 'modkendall' else METRIC_NAME}")
     ax.set_title(title)
-    plt.colorbar(sc, ax=ax, label=METRIC_SYM)
+    plt.colorbar(sc, ax=ax, label=cbar_label)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     _save_figure(fig, out)
@@ -594,13 +629,31 @@ def plot_comparison(km_results, som_results, redcap_results,
     n_lat, n_lon = len(lat), len(lon)
 
     vlim = _metric_vlim(tau_gridpt_map, km_opt["tau_map"], som_opt["tau_map"])
+    plot_maps = [tau_gridpt_map, km_opt["tau_map"], som_opt["tau_map"]]
+    cbar_label = METRIC_SYM
+    if METRIC == "modkendall":
+        plot_maps = [normalized_z_for_plot(a, scale=vlim)[0] for a in plot_maps]
+        cbar_label = "normalized z"
+        vmin, vmax = -1.0, 1.0
+    else:
+        vmin, vmax = -vlim, vlim
+    if METRIC == "modkendall":
+        comp_titles = [
+            "Grid-point normalized z (reference)",
+            f"K-means normalized z  k={km_opt['k']}  (raw z={km_opt['tau_domain']:.3f})",
+            f"SOM normalized z  {som_opt['m']}×{som_opt['n']}  (raw z={som_opt['tau_domain']:.3f})",
+        ]
+    else:
+        comp_titles = [
+            f"Grid-point {METRIC_SYM} (reference)",
+            f"K-means {METRIC_SYM}  k={km_opt['k']}  ({METRIC_SYM}={km_opt['tau_domain']:.3f})",
+            f"SOM {METRIC_SYM}  {som_opt['m']}×{som_opt['n']}  ({METRIC_SYM}={som_opt['tau_domain']:.3f})",
+        ]
     _three_panel_map(
-        [tau_gridpt_map, km_opt["tau_map"], som_opt["tau_map"]],
-        [f"Grid-point {METRIC_SYM} (reference)",
-         f"K-means {METRIC_SYM}  k={km_opt['k']}  ({METRIC_SYM}={km_opt['tau_domain']:.3f})",
-         f"SOM {METRIC_SYM}  {som_opt['m']}×{som_opt['n']}  ({METRIC_SYM}={som_opt['tau_domain']:.3f})"],
+        plot_maps,
+        comp_titles,
         lat, lon, OUT_DIR / "tau_comparison_maps.png",
-        vmin=-vlim, vmax=vlim, cmap=_TAU_CMAP, cbar_label=METRIC_SYM,
+        vmin=vmin, vmax=vmax, cmap=_TAU_CMAP, cbar_label=cbar_label,
     )
 
     km_labels_full = _expand_labels(km_opt["labels"], valid_mask, n_lat, n_lon)
