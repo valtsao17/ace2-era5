@@ -27,6 +27,7 @@ Outputs        : outputs/lag_may/sst_teleconnection_hhe_lagged/
 """
 from __future__ import annotations
 
+import os
 import sys
 import json
 from pathlib import Path
@@ -53,7 +54,24 @@ FORCING_DIR = PROJECT_ROOT / "data/lag_data/forcing_data_ace2era5"
 OUT_DIR     = PROJECT_ROOT / "outputs/lag_may/sst_teleconnection_hhe_lagged"
 FIG_DIR     = OUT_DIR / "figures"
 
-YEARS = list(range(1980, 2017))
+DEFAULT_YEARS = list(range(1980, 2017))
+
+
+def parse_years(spec: str | None, default: list[int] | None = None) -> list[int]:
+    if default is None:
+        default = DEFAULT_YEARS
+    if spec is None or spec == "all":
+        return list(default)
+    if ":" in spec:
+        start, end = [int(x) for x in spec.split(":", 1)]
+        return list(range(start, end + 1))
+    return [int(y) for y in spec.split(",") if y.strip()]
+
+
+YEARS = parse_years(
+    os.environ.get("RELHHE_YEARS", os.environ.get("DRY_HEAT_YEARS", os.environ.get("YEARS"))),
+    DEFAULT_YEARS,
+)
 
 # cumulative pre-JJA windows (month-day start, end) + contemporaneous reference
 LAGS = {
@@ -79,12 +97,18 @@ def build_lagged_sst():
     Returns dict lag -> (37, lat, lon), plus lat, lon."""
     cache = OUT_DIR / "lagged_sst.nc"
     if cache.exists():
-        print(f"Reusing {cache}", flush=True)
         ds = xr.open_dataset(cache)
-        lat, lon = ds["lat"].values, ds["lon"].values
-        out = {lag: ds[lag].values.astype(np.float32) for lag in LAGS}
+        cache_years = [int(y) for y in ds["year"].values] if "year" in ds.coords else []
+        can_reuse = cache_years == YEARS and all(lag in ds for lag in LAGS)
+        if can_reuse:
+            print(f"Reusing {cache}", flush=True)
+            lat, lon = ds["lat"].values, ds["lon"].values
+            out = {lag: ds[lag].values.astype(np.float32) for lag in LAGS}
+            ds.close()
+            return out, lat, lon
         ds.close()
-        return out, lat, lon
+        got = f"{cache_years[0]}-{cache_years[-1]}" if cache_years else "unknown years"
+        print(f"Rebuilding {cache}: cached {got}, requested {YEARS[0]}-{YEARS[-1]}", flush=True)
 
     acc = {lag: [] for lag in LAGS}
     ice_acc = {lag: [] for lag in LAGS}

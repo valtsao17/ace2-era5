@@ -30,6 +30,15 @@ YEARS     = list(range(1980, 2017))
 N_MEMBERS = 25
 
 
+def parse_years(spec: str) -> list[int]:
+    if spec == "all":
+        return YEARS
+    if ":" in spec:
+        start, end = [int(x) for x in spec.split(":", 1)]
+        return list(range(start, end + 1))
+    return [int(y) for y in spec.split(",") if y.strip()]
+
+
 def lag_times(year: int) -> list[datetime]:
     center = datetime(year, 5, 1, 0, 0, 0)
     return [center + timedelta(hours=6 * (i - 12)) for i in range(N_MEMBERS)]
@@ -52,32 +61,45 @@ def extract_member_jja_tmax(pred_path: Path, init_time: datetime) -> xr.DataArra
     return dmax.sel(time=jja).astype(np.float32)
 
 
-def combine_year(year: int):
+def combine_year(year: int, allow_partial: bool = False, force: bool = False):
     out_path = OUT_DIR / f"tmax_jja_{year}.nc"
-    if out_path.exists():
+    if out_path.exists() and not force:
         print(f"  SKIP {year}: already exists")
         return
 
     times   = lag_times(year)
-    members = []
+    members: dict[int, xr.DataArray] = {}
+    missing = []
 
     for idx in range(N_MEMBERS):
         pred_path = RUNS_ROOT / str(year) / f"member_{idx:02d}" / "autoregressive_predictions.nc"
-        if not pred_path.exists():
+        if not pred_path.exists() or pred_path.stat().st_size == 0:
+            if allow_partial:
+                missing.append(idx)
+                print(f"  [{year} m{idx:02d}] missing -> NaN", flush=True)
+                continue
             raise FileNotFoundError(f"Missing: {pred_path}")
-        print(f"  [{year} m{idx:02d}]", flush=True)
-        members.append(extract_member_jja_tmax(pred_path, times[idx]))
+        try:
+            print(f"  [{year} m{idx:02d}]", flush=True)
+            members[idx] = extract_member_jja_tmax(pred_path, times[idx])
+        except Exception as exc:
+            if not allow_partial:
+                raise
+            missing.append(idx)
+            print(f"  [{year} m{idx:02d}] unreadable -> NaN ({exc})", flush=True)
+
+    if not members:
+        raise RuntimeError(f"No usable members for {year}")
 
     # Use member 12 (init May 1 00:00) as the canonical time axis
-    ref_times = members[12].time.values
+    ref_idx = 12 if 12 in members else sorted(members)[0]
+    ref_times = members[ref_idx].time.values
+    lat = members[ref_idx]["lat"].values
+    lon = members[ref_idx]["lon"].values
 
-    tmax_arr = np.stack(
-        [m.reindex(time=ref_times, fill_value=np.nan).values for m in members],
-        axis=0,
-    )  # (25, n_jja_days, lat, lon)
-
-    lat = members[12]["lat"].values
-    lon = members[12]["lon"].values
+    tmax_arr = np.full((N_MEMBERS, len(ref_times), len(lat), len(lon)), np.nan, dtype=np.float32)
+    for idx, member in members.items():
+        tmax_arr[idx] = member.reindex(time=ref_times, fill_value=np.nan).values
 
     da = xr.DataArray(
         tmax_arr,
@@ -88,22 +110,32 @@ def combine_year(year: int):
             "lat":    lat,
             "lon":    lon,
         },
-        attrs={"units": "K", "long_name": "JJA daily max TMP2m", "init_year": year},
+        attrs={
+            "units": "K",
+            "long_name": "JJA daily max TMP2m",
+            "init_year": year,
+            "n_members_available": len(members),
+            "missing_members": ",".join(str(x) for x in missing),
+            "partial_member_file": int(bool(missing)),
+        },
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     da.to_dataset(name="TMP2m").to_netcdf(out_path)
-    print(f"  wrote {out_path.name}", flush=True)
+    print(f"  wrote {out_path.name} ({len(members)}/25 members)", flush=True)
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--years", default="all", help="'all' or comma-separated years")
+    p.add_argument("--allow-partial", action="store_true",
+                   help="Write a 25-member file with NaNs for missing/unreadable members")
+    p.add_argument("--force", action="store_true", help="Overwrite existing combined files")
     args  = p.parse_args()
-    years = YEARS if args.years == "all" else [int(y) for y in args.years.split(",")]
+    years = parse_years(args.years)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for year in years:
         print(f"\n=== {year} ===", flush=True)
-        combine_year(year)
+        combine_year(year, allow_partial=args.allow_partial, force=args.force)
     print("\nDone.", flush=True)
 
 

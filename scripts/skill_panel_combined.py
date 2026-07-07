@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Single combined CONUS panel of all four day/season HHE skill diagnostics:
+"""Single combined CONUS panel of all four raw heat-extreme skill diagnostics:
 
     [ Kendall τ        ]   [ modified-Kendall z ]
     [ Precision        ]   [ Recall                  ]
 
 Puts the two rank-correlation skill metrics (signed, diverging blue-white-red)
-above the two day-level classification metrics (0–1, sequential) so the whole
+above the two season-level classification metrics (0–1, sequential) so the whole
 skill story reads from one figure. All four fields already exist on disk on the
 same 1° grid; this script only assembles + renders them (CONUS box).
 
 Sources (CONUS slice):
   Kendall τ      → seasonal_jja_sliding7d/skill_jja_seasonal.nc          (kendall_tau)
   mod-Kendall z  → seasonal_jja_sliding7d_modkendall/skill_jja_seasonal.nc (kendall_tau holds z)
-  precision      → seasonal_jja_sliding7d/precision_recall_jja_seasonal.nc (precision)
-  recall         → seasonal_jja_sliding7d/precision_recall_jja_seasonal.nc (recall)
+  precision      → seasonal_jja_sliding7d/precision_recall_jja_seasonal_event.nc (precision)
+  recall         → seasonal_jja_sliding7d/precision_recall_jja_seasonal_event.nc (recall)
+
+Precision/recall are plus-four/Agresti-Coull binomial estimates:
+  precision = (TP + 2) / (TP + FP + 4)
+  recall    = (TP + 2) / (TP + FN + 4)
+
+One case is one grid-cell JJA season-year. A positive event is a high-burden
+season: seasonal heat-extreme frequency above the grid-cell upper-tail
+percentile threshold (75th percentile by default).
 
 Output → outputs/lag_may/seasonal_jja_sliding7d_modkendall/skill_panel_combined.png
 """
@@ -42,14 +50,12 @@ from copy import copy
 
 SLIDING_DIR = PROJECT_ROOT / "outputs/lag_may/seasonal_jja_sliding7d"
 MODK_DIR    = PROJECT_ROOT / "outputs/lag_may/seasonal_jja_sliding7d_modkendall"
+SEASONAL_PR_NC = SLIDING_DIR / "precision_recall_jja_seasonal_event.nc"
 
 # Skill colormap that draws UNDEFINED cells (NaN) in a distinct neutral grey
 # instead of white. For precision this matters: a cell where the model never
-# predicts a heavy day has TP+FP=0 -> precision is undefined (0/0), which is
-# physically different from a genuine precision of 0. With the plain _SKILL_CMAP
-# (value 0 = white AND set_bad("white")) the two are indistinguishable; here the
-# undefined cells render grey so "no predicted heavy days" reads as no-data, not
-# as a perfect/zero score.
+# predicts a positive season has TP+FP=0 -> precision is undefined (0/0), which
+# is physically different from a genuine precision of 0.
 _SKILL_CMAP_NA = copy(_SKILL_CMAP)
 _SKILL_CMAP_NA.set_bad("#bdbdbd")
 
@@ -83,22 +89,43 @@ def _panel(ax, field, lat, lon, title, cmap, vmin, vmax, cbar_label, mean_lbl=No
 
 
 def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--sliding-dir", type=Path, default=SLIDING_DIR)
+    p.add_argument("--modk-dir", type=Path, default=MODK_DIR)
+    p.add_argument("--pr-nc", type=Path, default=None)
+    p.add_argument("--out", type=Path, default=None)
+    p.add_argument("--label", default="raw heat-extreme (90th-pct TMP2m)")
+    args = p.parse_args()
+    sliding_dir = args.sliding_dir
+    modk_dir = args.modk_dir
+    pr_nc = args.pr_nc or (sliding_dir / "precision_recall_jja_seasonal_event.nc")
+    out = args.out or (modk_dir / "skill_panel_combined_raw.png")
+
     # Kendall τ (+ p-value for stippling)
-    with xr.open_dataset(SLIDING_DIR / "skill_jja_seasonal.nc") as ds:
+    with xr.open_dataset(sliding_dir / "skill_jja_seasonal.nc") as ds:
         lat = ds["lat"].values[CONUS_LAT_SLICE]
         lon = ds["lon"].values[CONUS_LON_SLICE]
         tau = ds["kendall_tau"].values[CONUS_LAT_SLICE, CONUS_LON_SLICE]
         tau_p = ds["tau_p_value"].values[CONUS_LAT_SLICE, CONUS_LON_SLICE]
+        years_label = str(ds.attrs.get("years", "1980-2016")).replace("-", "–")
 
     # modified-Kendall z (variable name is kendall_tau but holds z)
-    with xr.open_dataset(MODK_DIR / "skill_jja_seasonal.nc") as ds:
+    with xr.open_dataset(modk_dir / "skill_jja_seasonal.nc") as ds:
         zmap = ds["kendall_tau"].values[CONUS_LAT_SLICE, CONUS_LON_SLICE]
         zk = int(ds["kendall_tau"].attrs.get("truncation_k", 10))
 
-    # precision / recall
-    with xr.open_dataset(SLIDING_DIR / "precision_recall_jja_seasonal.nc") as ds:
+    # season-level precision / recall
+    if not pr_nc.exists():
+        raise FileNotFoundError(
+            f"{pr_nc} not found. Run "
+            "`python scripts/seasonal_precision_recall_jja.py --event-percentile 75` "
+            "before regenerating the combined skill panel."
+        )
+    with xr.open_dataset(pr_nc) as ds:
         prec = ds["precision"].values[CONUS_LAT_SLICE, CONUS_LON_SLICE]
         rec  = ds["recall"].values[CONUS_LAT_SLICE, CONUS_LON_SLICE]
+        event_pct = float(ds.attrs.get("event_percentile", 75.0))
 
     # NON-significance masks for the rank-correlation panels (stipple = p>=0.05)
     tau_ns = np.isfinite(tau) & ~(np.isfinite(tau_p) & (tau_p < 0.05))
@@ -123,32 +150,31 @@ def main():
            _TAU_CMAP, -1.0, 1.0, "normalized z",
            domain_scores_label("mean norm z", z_plot, lat, land),
            sig=z_ns)
-    _panel(axes[1, 0], prec, lat, lon, "Precision  (day-level)",
+    pr_title = f"seasonal upper-{100.0 - event_pct:.0f}% event, plus-four"
+    _panel(axes[1, 0], prec, lat, lon, f"Precision  ({pr_title})",
            _SKILL_CMAP_NA, 0.0, 1.0, "precision", domain_scores_label("precision", prec, lat, land))
-    _panel(axes[1, 1], rec, lat, lon, "Recall  (day-level)",
+    _panel(axes[1, 1], rec, lat, lon, f"Recall  ({pr_title})",
            _SKILL_CMAP_NA, 0.0, 1.0, "recall", domain_scores_label("recall", rec, lat, land))
-    # flag what the neutral grey means (undefined precision: TP+FP=0, i.e. the
-    # model never predicted a heavy day there — distinct from a genuine 0).
-    # grey = undefined: precision where the model predicted no heavy days
+    # grey = undefined: precision where ACE2 predicted no positive seasons
     # (TP+FP=0); recall where ERA5 observed none (TP+FN=0). Only annotate when
-    # such cells exist (a per-cell 90th-pct threshold guarantees observed events
-    # everywhere, so recall here has none).
+    # such cells exist.
     _bbox = dict(boxstyle="round,pad=0.25", fc="white", alpha=0.85, ec="0.6")
     n_na_p = int(np.sum(~np.isfinite(prec)))
     if n_na_p:
-        axes[1, 0].text(0.98, 0.03, f"grey = undefined (no predicted\nheavy days): {n_na_p} cells",
+        axes[1, 0].text(0.98, 0.03, f"grey = undefined (no predicted\npositive seasons): {n_na_p} cells",
                         transform=axes[1, 0].transAxes, ha="right", va="bottom",
                         fontsize=7, bbox=_bbox, zorder=7)
     n_na_r = int(np.sum(~np.isfinite(rec)))
     if n_na_r:
-        axes[1, 1].text(0.98, 0.03, f"grey = undefined (no observed\nheavy days): {n_na_r} cells",
+        axes[1, 1].text(0.98, 0.03, f"grey = undefined (no observed\npositive seasons): {n_na_r} cells",
                         transform=axes[1, 1].transAxes, ha="right", va="bottom",
                         fontsize=7, bbox=_bbox, zorder=7)
 
-    fig.suptitle("CONUS raw heat-extreme (90th-pct TMP2m) skill — rank-correlation (top, "
-                 "stipple = NOT significant: τ p≥0.05 / |z|≤1.96) vs day-level classification "
-                 "(bottom)  |  JJA 1980–2016, seasonal, no-LOO", fontsize=12)
-    out = MODK_DIR / "skill_panel_combined_raw.png"
+    fig.suptitle(f"CONUS {args.label} skill — rank-correlation (top, "
+                 "stipple = NOT significant: τ p≥0.05 / |z|≤1.96) vs season-level classification "
+                 f"(bottom; precision/recall for >p{event_pct:.0f} seasonal-frequency years)  |  "
+                 f"JJA {years_label}, seasonal, no-LOO",
+                 fontsize=12)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)

@@ -66,17 +66,22 @@ def main():
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--metric-k", type=int, default=DEFAULT_K)
+    p.add_argument("--freq-nc", type=Path, default=SLIDING_DIR / "jja_seasonal_freqs.nc")
+    p.add_argument("--out-dir", type=Path, default=OUT_DIR)
+    p.add_argument("--label", default="raw heat-extreme")
     args = p.parse_args()
     k = args.metric_k
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    freq_nc = SLIDING_DIR / "jja_seasonal_freqs.nc"
+    freq_nc = args.freq_nc
     print(f"Loading {freq_nc}", flush=True)
     ds = xr.open_dataset(freq_nc)
     lat = ds["lat"].values
     lon = ds["lon"].values
     pred = ds["ace2_freq"].values.astype(np.float32)
     obs  = ds["era5_freq"].values.astype(np.float32)
+    years = [int(y) for y in ds["year"].values]
     ds.close()
 
     print(f"Computing grid-point modified-Kendall z (k={k}) ...", flush=True)
@@ -88,8 +93,9 @@ def main():
     # reference loader (ds["kendall_tau"]) consumes it without changes.
     da = xr.DataArray(z_map, dims=["lat", "lon"], coords={"lat": lat, "lon": lon},
                       attrs={"long_name": f"modified-Kendall z (k={k})", "truncation_k": k})
-    out_nc = OUT_DIR / "skill_jja_seasonal.nc"
-    xr.Dataset({"kendall_tau": da, "mod_kendall_z": da}).to_netcdf(out_nc)
+    out_nc = out_dir / "skill_jja_seasonal.nc"
+    xr.Dataset({"kendall_tau": da, "mod_kendall_z": da},
+               attrs={"years": f"{years[0]}-{years[-1]}", "n_years": len(years)}).to_netcdf(out_nc)
     print(f"wrote {out_nc}", flush=True)
 
     # Plot normalized z on [-1, 1] so the color scale is comparable to tau.
@@ -97,9 +103,9 @@ def main():
     label = f"normalized mod-Kendall z (k={k})"
 
     _single_map_figure(z_plot, lat, lon,
-                       f"Grid-point normalized modified-Kendall z  (k={k})  |  ACE2 vs ERA5 JJA HHE freq",
+                       f"Grid-point normalized modified-Kendall z  (k={k})  |  ACE2 vs ERA5 JJA {args.label} freq",
                        -1.0, 1.0, _TAU_CMAP, label,
-                       OUT_DIR / "tau_jja_seasonal_global_modkendall.png")
+                       out_dir / "tau_jja_seasonal_global_modkendall.png")
 
     zc = z_map[CONUS_LAT_SLICE, CONUS_LON_SLICE]
     zc_plot, zc_scale = normalized_z_for_plot(zc)
@@ -107,7 +113,7 @@ def main():
     _single_map_figure(zc_plot, latc, lonc,
                        f"CONUS grid-point normalized modified-Kendall z  (k={k})",
                        -1.0, 1.0, _TAU_CMAP, label,
-                       OUT_DIR / "tau_jja_seasonal_conus_modkendall.png")
+                       out_dir / "tau_jja_seasonal_conus_modkendall.png")
 
     print(f"done. normalized z plot scales: global={z_scale:.3f}, CONUS={zc_scale:.3f}", flush=True)
 

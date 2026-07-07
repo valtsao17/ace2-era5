@@ -79,6 +79,15 @@ TARGETS = [
     ("Aug1",  8, 1,  92),
 ]
 
+
+def parse_years(spec: str) -> list[int]:
+    if spec == "all":
+        return YEARS
+    if ":" in spec:
+        start, end = [int(x) for x in spec.split(":", 1)]
+        return list(range(start, end + 1))
+    return [int(y) for y in spec.split(",") if y.strip()]
+
 plt.rcParams.update({
     "figure.facecolor": "white",
     "axes.facecolor":   "white",
@@ -464,7 +473,7 @@ def plot_skill_vs_lead(lead_days: list[int], bss_list: list[float],
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
 
     ax1.set_title("ACE2 JJA heat-extreme skill vs lead time\n"
-                  "1980–2016 · global cos-lat weighted", fontsize=10)
+                  f"{YEARS[0]}–{YEARS[-1]} · global cos-lat weighted", fontsize=10)
     ax1.set_xticks(lead_days)
     ax1.set_xticklabels([f"~{d}d" for d in lead_days])
 
@@ -480,16 +489,15 @@ def plot_skill_vs_lead(lead_days: list[int], bss_list: list[float],
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--force", action="store_true", help="Recompute cached thresholds")
-    p.add_argument("--years", default="all", help="'all' or comma-separated years, e.g. 1980,1981")
+    p.add_argument("--years", default="all", help="'all', START:END, or comma-separated years, e.g. 1980:2022")
     return p.parse_args()
 
 
 def main():
     global YEARS
     args = parse_args()
-    if args.years != "all":
-        YEARS = [int(y) for y in args.years.split(",")]
-        print(f"Running on years: {YEARS[0]}–{YEARS[-1]} ({len(YEARS)} years)", flush=True)
+    YEARS = parse_years(args.years)
+    print(f"Running on years: {YEARS[0]}–{YEARS[-1]} ({len(YEARS)} years)", flush=True)
     for d in [CACHE_DIR, THRESH_DIR, FIGURES_DIR, METRICS_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
@@ -570,7 +578,7 @@ def main():
 
     # ── JJA pooled (all 3 target dates combined) ──────────────────────────
     print("\nComputing JJA-pooled metrics ...", flush=True)
-    pred_jja = np.concatenate(all_pred_prob, axis=0)   # (111, lat, lon)
+    pred_jja = np.concatenate(all_pred_prob, axis=0)   # (n_years * target dates, lat, lon)
     obs_jja  = np.concatenate(all_obs_ext,   axis=0)
 
     bss_jja  = brier_skill_score(pred_jja, obs_jja)
@@ -618,7 +626,7 @@ def main():
 
     da_jja = xr.DataArray(tau_jja, dims=["lat", "lon"],
                           coords={"lat": lat, "lon": lon},
-                          attrs={"n_events": 111})
+                          attrs={"n_events": len(YEARS) * len(TARGETS)})
     write_atomic(da_jja.rename("kendall_tau").to_dataset(),
                  METRICS_DIR / "tau_map_jja.nc")
 

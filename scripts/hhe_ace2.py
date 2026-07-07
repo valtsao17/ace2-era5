@@ -22,6 +22,7 @@ Outputs -> outputs/lag_may/heat_index_era5/jja_hi_freq_ace2.nc
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,7 +36,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from heat_index_era5 import heat_index, HI_THRESH, MAGNUS_A, MAGNUS_B
 
-RUNS_ROOT = PROJECT_ROOT / "outputs/lag_may/runs"
+RUNS_ROOT = Path(os.environ.get("RUNS_ROOT", PROJECT_ROOT / "outputs/lag_may/runs"))
 OUT_DIR   = PROJECT_ROOT / "outputs/lag_may/heat_index_era5"
 OUT_NC    = OUT_DIR / "jja_hi_freq_ace2.nc"
 
@@ -43,6 +44,15 @@ YEARS     = list(range(1980, 2017))
 N_MEMBERS = 25
 EPS       = 0.622          # Rd/Rv
 NEEDED    = ("TMP2m", "Q2m", "PRESsfc")
+
+
+def parse_years(spec: str) -> list[int]:
+    if spec == "all":
+        return YEARS
+    if ":" in spec:
+        start, end = [int(x) for x in spec.split(":", 1)]
+        return list(range(start, end + 1))
+    return [int(y) for y in spec.split(",") if y.strip()]
 
 
 def lag_times(year: int) -> list[datetime]:
@@ -124,11 +134,11 @@ def year_freq(year: int):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--years", default="all", help="'all' or comma-separated years")
+    p.add_argument("--years", default="all", help="'all', START:END, or comma-separated years")
     p.add_argument("--min-members", type=int, default=1,
                    help="Skip a year unless at least this many members are complete")
     args = p.parse_args()
-    years = YEARS if args.years == "all" else [int(y) for y in args.years.split(",")]
+    years = parse_years(args.years)
 
     freqs, kept_years, lat, lon, counts = [], [], None, None, []
     for year in years:
@@ -155,13 +165,13 @@ def main():
                "definition": "HI from daily Tmax and daily RHmin; RH from Q2m,TMP2m,PRESsfc"},
     )
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    if len(kept_years) == len(YEARS):
+    if len(kept_years) == len(years):
         out.to_netcdf(OUT_NC)
         print(f"wrote {OUT_NC}", flush=True)
     else:
         partial = OUT_DIR / "jja_hi_freq_ace2_partial.nc"
         out.to_netcdf(partial)
-        print(f"wrote {partial}  ({len(kept_years)}/{len(YEARS)} years)", flush=True)
+        print(f"wrote {partial}  ({len(kept_years)}/{len(years)} years)", flush=True)
 
 
 if __name__ == "__main__":
